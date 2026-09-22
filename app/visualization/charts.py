@@ -5,11 +5,17 @@ from typing import Any
 import textwrap
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 import plotly.express as px
+import plotly.figure_factory as ff
+import plotly.graph_objects as go
+from scipy.cluster.hierarchy import linkage
+from scipy.spatial.distance import pdist
+from sklearn.metrics.pairwise import cosine_similarity
 
 
 class ChartBuilder:
@@ -46,7 +52,7 @@ class ChartBuilder:
             paths["cluster_scatter"] = html
         return paths
 
-    def build_demo_focus(self, catalogue: pd.DataFrame, output_dir: Path, expected_count: int) -> dict[str, Path]:
+    def build_demo_focus(self, catalogue: pd.DataFrame, clusters: dict[str, Any], output_dir: Path, expected_count: int) -> dict[str, Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
         paths: dict[str, Path] = {}
         paths["focus_diameter_handle"] = self._focus_stacked(
@@ -65,7 +71,206 @@ class ChartBuilder:
         paths["focus_product_type"] = self._bar(catalogue, "Product Type", output_dir / "isolating_cocks_product_type.png")
         paths["focus_coverage"] = self._focus_coverage(catalogue, output_dir / "isolating_cocks_demo_coverage.png", expected_count)
         paths["focus_characteristic_flow"] = self._focus_characteristic_flow(catalogue, output_dir / "isolating_cocks_characteristic_flow.html")
+        paths.update(self._advanced_cluster_charts(catalogue, clusters, output_dir))
         return paths
+
+    def _advanced_cluster_charts(self, df: pd.DataFrame, clusters: dict[str, Any], output_dir: Path) -> dict[str, Path]:
+        working, matrix, features = self._cluster_matrix(df, clusters)
+        if working.empty or len(working) < 2 or matrix.shape[1] == 0:
+            return {}
+        paths: dict[str, Path] = {}
+        paths["advanced_scatter_cluster"] = self._advanced_scatter_cluster(working, output_dir / "advanced_scatter_cluster.html")
+        paths["cluster_colored_map"] = self._cluster_colored_map(working, output_dir / "cluster_colored_map.html")
+        paths["cluster_bubble"] = self._cluster_bubble(working, output_dir / "cluster_bubble.html")
+        paths["cluster_sankey"] = self._cluster_sankey(working, output_dir / "cluster_sankey.html")
+        paths["cluster_radar"] = self._cluster_radar(working, features, output_dir / "cluster_radar.html")
+        paths["affinity_heatmap"] = self._affinity_heatmap(working, matrix, output_dir / "affinity_heatmap.html")
+        paths["cluster_dendrogram"] = self._cluster_dendrogram(working, matrix, output_dir / "cluster_dendrogram.html")
+        return paths
+
+    def _cluster_matrix(self, df: pd.DataFrame, clusters: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+        points = pd.DataFrame(clusters.get("points", []))
+        if points.empty or "PartNumber" not in points or "PartNumber" not in df:
+            return pd.DataFrame(), pd.DataFrame(), []
+        features = [c for c in clusters.get("features", []) if c in df.columns]
+        if not features:
+            features = [c for c in ["Product Family", "Product Name", "Product Type", "Technical attribute 1", "Technical attribute 2", "Technical attribute 3", "Technical attribute 4"] if c in df.columns]
+        keep = ["PartNumber", "Master PN", *features]
+        enriched = points.merge(df[[c for c in keep if c in df.columns]], on="PartNumber", how="left", suffixes=("", "_Catalogue"))
+        for column in features:
+            catalogue_column = f"{column}_Catalogue"
+            if catalogue_column in enriched.columns:
+                enriched[column] = enriched[column].where(enriched[column].astype(str).str.len() > 0, enriched[catalogue_column])
+                enriched = enriched.drop(columns=[catalogue_column])
+        enriched[features] = enriched[features].replace("", "UNKNOWN").fillna("UNKNOWN")
+        matrix = pd.get_dummies(enriched[features], prefix=features, dtype=float)
+        return enriched, matrix, features
+
+    def _advanced_scatter_cluster(self, df: pd.DataFrame, path: Path) -> Path:
+        fig = px.scatter(
+            df,
+            x="PCA_X",
+            y="PCA_Y",
+            color="Cluster",
+            symbol="Cluster",
+            hover_data=["PartNumber", "Master PN", "Product Type", "Technical attribute 1", "Technical attribute 2", "Technical attribute 3", "Technical attribute 4"],
+            title="Scatter plot with generated clusters",
+        )
+        fig.update_traces(marker=dict(size=10, line=dict(width=0.8, color="white")))
+        fig.update_layout(margin=dict(t=58, l=20, r=20, b=20), font=dict(size=12))
+        fig.write_html(path)
+        return path
+
+    def _cluster_colored_map(self, df: pd.DataFrame, path: Path) -> Path:
+        fig = px.scatter(
+            df,
+            x="PCA_X",
+            y="PCA_Y",
+            color="Cluster",
+            hover_name="PartNumber",
+            hover_data=["Product Type", "Technical attribute 1", "Technical attribute 2", "Technical attribute 3", "Technical attribute 4"],
+            title="Colored cluster map",
+        )
+        fig.update_traces(marker=dict(size=15, opacity=0.82, line=dict(width=1, color="white")))
+        fig.update_xaxes(visible=False)
+        fig.update_yaxes(visible=False)
+        fig.update_layout(margin=dict(t=58, l=20, r=20, b=20), plot_bgcolor="#f4f7fb", font=dict(size=12))
+        fig.write_html(path)
+        return path
+
+    def _cluster_bubble(self, df: pd.DataFrame, path: Path) -> Path:
+        rows = []
+        for cluster, group in df.groupby("Cluster"):
+            rows.append(
+                {
+                    "Cluster": str(cluster),
+                    "PCA_X": group["PCA_X"].mean(),
+                    "PCA_Y": group["PCA_Y"].mean(),
+                    "Products": len(group),
+                    "Dominant diameter": group.get("Technical attribute 1", pd.Series(dtype=str)).replace("", "UNKNOWN").mode().iat[0],
+                    "Dominant type": group.get("Product Type", pd.Series(dtype=str)).replace("", "UNKNOWN").mode().iat[0],
+                    "Examples": ", ".join(group["PartNumber"].head(6).astype(str)),
+                }
+            )
+        bubbles = pd.DataFrame(rows)
+        fig = px.scatter(
+            bubbles,
+            x="PCA_X",
+            y="PCA_Y",
+            size="Products",
+            color="Cluster",
+            text="Cluster",
+            hover_data=["Products", "Dominant type", "Dominant diameter", "Examples"],
+            title="Bubble cluster by size and distance",
+            size_max=72,
+        )
+        fig.update_traces(textposition="middle center", marker=dict(opacity=0.78, line=dict(width=1, color="white")))
+        fig.update_layout(margin=dict(t=58, l=20, r=20, b=20), font=dict(size=12))
+        fig.write_html(path)
+        return path
+
+    def _cluster_sankey(self, df: pd.DataFrame, path: Path) -> Path:
+        dims = [c for c in ["Product Type", "Technical attribute 1", "Technical attribute 2", "Technical attribute 3"] if c in df.columns]
+        if not dims:
+            path.write_text("<html><body>No Sankey dimensions available</body></html>", encoding="utf-8")
+            return path
+        working = df[[*dims, "Cluster"]].replace("", "UNKNOWN").copy()
+        working["Cluster"] = "Cluster " + working["Cluster"].astype(str)
+        node_labels: list[str] = []
+        node_index: dict[str, int] = {}
+        links: dict[tuple[str, str], int] = {}
+
+        def node(label: str) -> int:
+            if label not in node_index:
+                node_index[label] = len(node_labels)
+                node_labels.append(label)
+            return node_index[label]
+
+        for row in working.to_dict("records"):
+            chain = [str(row[d]) for d in dims] + [str(row["Cluster"])]
+            for source, target in zip(chain, chain[1:]):
+                node(source)
+                node(target)
+                links[(source, target)] = links.get((source, target), 0) + 1
+        fig = go.Figure(
+            data=[
+                go.Sankey(
+                    arrangement="snap",
+                    node=dict(label=node_labels, pad=14, thickness=16, line=dict(color="#cbd5e1", width=0.5)),
+                    link=dict(
+                        source=[node_index[s] for s, _ in links],
+                        target=[node_index[t] for _, t in links],
+                        value=list(links.values()),
+                    ),
+                )
+            ]
+        )
+        fig.update_layout(title_text="Sankey: characteristics flowing into clusters", margin=dict(t=58, l=20, r=20, b=20), font=dict(size=11))
+        fig.write_html(path)
+        return path
+
+    def _cluster_radar(self, df: pd.DataFrame, features: list[str], path: Path) -> Path:
+        categories = ["Completeness", "Drain variety", "Contact variety", "Handle variety", "Type concentration"]
+        fig = go.Figure()
+        for cluster, group in df.groupby("Cluster"):
+            technical = [c for c in features if c.startswith("Technical attribute") and c in group.columns]
+            completeness = float((group[technical].replace("UNKNOWN", pd.NA).notna().mean().mean() if technical else 0) * 100)
+            drain_variety = self._normalized_unique(group, "Technical attribute 2")
+            contact_variety = self._normalized_unique(group, "Technical attribute 3")
+            handle_variety = self._normalized_unique(group, "Technical attribute 4")
+            type_concentration = self._top_share(group, "Product Type") * 100
+            values = [completeness, drain_variety, contact_variety, handle_variety, type_concentration]
+            fig.add_trace(go.Scatterpolar(r=values + [values[0]], theta=categories + [categories[0]], fill="toself", name=f"Cluster {cluster}"))
+        fig.update_layout(
+            title="Cluster radar comparison",
+            polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+            margin=dict(t=58, l=35, r=35, b=25),
+            font=dict(size=12),
+        )
+        fig.write_html(path)
+        return path
+
+    def _affinity_heatmap(self, df: pd.DataFrame, matrix: pd.DataFrame, path: Path) -> Path:
+        similarity = cosine_similarity(matrix)
+        labels = df["PartNumber"].astype(str).tolist()
+        fig = px.imshow(
+            similarity,
+            x=labels,
+            y=labels,
+            color_continuous_scale="Blues",
+            zmin=0,
+            zmax=1,
+            title="Affinity heatmap by technical similarity",
+            aspect="auto",
+        )
+        fig.update_layout(margin=dict(t=58, l=80, r=20, b=90), font=dict(size=9))
+        fig.write_html(path)
+        return path
+
+    def _cluster_dendrogram(self, df: pd.DataFrame, matrix: pd.DataFrame, path: Path) -> Path:
+        labels = df["PartNumber"].astype(str).tolist()
+        dense = matrix.to_numpy(dtype=float)
+        if len(dense) < 3:
+            path.write_text("<html><body>At least three products are required for a dendrogram</body></html>", encoding="utf-8")
+            return path
+        distances = pdist(dense, metric="cosine")
+        link = linkage(distances, method="average")
+        fig = ff.create_dendrogram(dense, labels=labels, orientation="left", linkagefun=lambda _: link)
+        fig.update_layout(title="Hierarchical dendrogram by technical affinity", margin=dict(t=58, l=120, r=20, b=30), font=dict(size=10), height=980)
+        fig.write_html(path)
+        return path
+
+    def _normalized_unique(self, df: pd.DataFrame, column: str) -> float:
+        if column not in df.columns or df.empty:
+            return 0.0
+        count = df[column].replace("", "UNKNOWN").nunique()
+        return min(100.0, float(count / max(1, len(df))) * 100)
+
+    def _top_share(self, df: pd.DataFrame, column: str) -> float:
+        if column not in df.columns or df.empty:
+            return 0.0
+        counts = df[column].replace("", "UNKNOWN").value_counts(normalize=True)
+        return float(counts.iloc[0]) if not counts.empty else 0.0
 
     def _focus_coverage(self, df: pd.DataFrame, path: Path, expected_count: int) -> Path:
         found = len(df)

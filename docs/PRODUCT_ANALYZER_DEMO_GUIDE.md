@@ -67,6 +67,13 @@ Important focused visuals:
 - `isolating_cocks_drain_contact.png`
 - `isolating_cocks_characteristic_flow.html`
 - `cluster_scatter.html`
+- `advanced_scatter_cluster.html`
+- `cluster_dendrogram.html`
+- `affinity_heatmap.html`
+- `cluster_bubble.html`
+- `cluster_colored_map.html`
+- `cluster_sankey.html`
+- `cluster_radar.html`
 
 ## 4. Page-By-Page Guide
 
@@ -396,6 +403,13 @@ It makes the demo boundaries clear. The current demo is local and deterministic;
 | Drain vs contact | `isolating_cocks_drain_contact.png` | Drain options crossed with contact options. | Shows how functional options combine. |
 | Characteristic flow | `isolating_cocks_characteristic_flow.html` | Product type to diameter to drain to contact to handle. | Shows common configuration paths across the category. |
 | Cluster scatter | `cluster_scatter.html` | Similar products projected into 2D and colored by cluster. | Shows natural groupings and outliers. |
+| Advanced scatter cluster | `advanced_scatter_cluster.html` | Scatter plot with cluster color and symbol encoding. | Matches the requested cluster-symbol style using real catalogue data. |
+| Hierarchical dendrogram | `cluster_dendrogram.html` | Product affinity tree based on technical attributes. | Shows which FT/product codes are closest by branch distance. |
+| Affinity heatmap | `affinity_heatmap.html` | Pairwise similarity between product codes. | Dark cells immediately reveal families of similar products. |
+| Bubble cluster | `cluster_bubble.html` | Cluster centroid positions with bubble size based on product count. | Shows which clusters are larger and how far groups are from one another. |
+| Colored cluster map | `cluster_colored_map.html` | Manager-friendly PCA map with larger colored cluster points. | Gives a presentation-ready view of product families. |
+| Sankey by characteristics | `cluster_sankey.html` | Flow from product type and technical characteristics into clusters. | Explains how codes converge into families/clusters. |
+| Cluster radar | `cluster_radar.html` | Radar comparison of clusters across completeness, variety, and concentration metrics. | Compares cluster profiles beyond simple count or position. |
 | Attribute completeness | `attribute_completeness.png` | Filled percentage for technical attributes. | Shows where catalogue data is complete or sparse. |
 | Rule influence | `rule_influence.png` | Attribute influence on PartNumber patterns. | Helps identify which characteristics drive product code changes. |
 | Anomaly breakdown | `anomaly_breakdown.png` | Issue types grouped by severity. | Turns catalogue problems into a review queue. |
@@ -452,4 +466,3 @@ Not yet implemented:
 - Full production-grade BOM table parser.
 
 The app already marks uncertain results as review items instead of silently guessing.
-

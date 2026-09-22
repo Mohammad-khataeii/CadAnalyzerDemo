@@ -90,7 +90,7 @@ class DemoRunner:
         bom_rows = [row for a in analyses for row in a.bom_rows]
         chart_builder = ChartBuilder()
         chart_paths = chart_builder.build_all(focus_catalogue, clusters, output_dir, anomalies=anomalies, evidence=evidence, bom_rows=bom_rows, rule_results=rule_results)
-        chart_paths.update(chart_builder.build_demo_focus(focus_catalogue, output_dir, self.settings.focus_expected_count))
+        chart_paths.update(chart_builder.build_demo_focus(focus_catalogue, clusters, output_dir, self.settings.focus_expected_count))
         output_files.update(chart_paths)
         advance("Generated isolating cock visual analytics")
 

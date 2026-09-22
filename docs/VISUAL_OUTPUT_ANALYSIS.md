@@ -15,6 +15,13 @@ The current catalogue has enough signal for more than frequency bars. The most u
 | BOM frequency chart | `bom_frequency.png` | Highlights reused component identifiers across analyzed PDFs. |
 | Cluster scatter | `cluster_scatter.html` | Shows catalogue similarity structure after categorical encoding and PCA. |
 | Contact/handle heatmap | `contact_handle_matrix.png` | Shows relationships between contact and handle/control-related attributes. |
+| Advanced scatter cluster | `advanced_scatter_cluster.html` | Interactive scatter with cluster color and symbol encoding. |
+| Hierarchical dendrogram | `cluster_dendrogram.html` | Shows product affinity as a tree; closer branches indicate higher technical similarity. |
+| Affinity heatmap | `affinity_heatmap.html` | Shows pairwise technical similarity between product codes. Darker cells mean stronger affinity. |
+| Bubble cluster | `cluster_bubble.html` | Shows cluster centroids, relative distance, and cluster size. |
+| Colored cluster map | `cluster_colored_map.html` | Manager-friendly PCA map with colored product clusters. |
+| Sankey by characteristics | `cluster_sankey.html` | Shows how product types and technical characteristics flow into clusters. |
+| Cluster radar | `cluster_radar.html` | Compares clusters across completeness, variety, and concentration indicators. |
 
 ## Useful next visuals
 

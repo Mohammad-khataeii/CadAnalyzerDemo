@@ -3,13 +3,15 @@ from __future__ import annotations
 import warnings
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from sklearn.cluster import AgglomerativeClustering, DBSCAN, KMeans
 from sklearn.compose import ColumnTransformer
-from sklearn.decomposition import PCA
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+warnings.filterwarnings("ignore", category=RuntimeWarning, module=r"sklearn\.utils\.extmath")
 
 
 class ClusteringEngine:
@@ -25,22 +27,27 @@ class ClusteringEngine:
             remainder="drop",
         )
         matrix = transformer.fit_transform(x)
+        dense = matrix.toarray() if hasattr(matrix, "toarray") else matrix
+        dense = np.nan_to_num(dense.astype(float), nan=0.0, posinf=0.0, neginf=0.0)
         cluster_count = max(2, min(n_clusters, len(working)))
         if method == "hierarchical":
-            labels = AgglomerativeClustering(n_clusters=cluster_count).fit_predict(matrix.toarray())
+            labels = AgglomerativeClustering(n_clusters=cluster_count).fit_predict(dense)
         elif method == "dbscan":
-            labels = DBSCAN(eps=1.2, min_samples=2).fit_predict(matrix.toarray())
+            labels = DBSCAN(eps=1.2, min_samples=2).fit_predict(dense)
         else:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
-                labels = KMeans(n_clusters=cluster_count, random_state=42, n_init="auto").fit_predict(matrix)
+                with np.errstate(all="ignore"):
+                    labels = KMeans(n_clusters=cluster_count, random_state=42, n_init="auto").fit_predict(dense)
             method = "kmeans"
-        dense = matrix.toarray() if hasattr(matrix, "toarray") else matrix
-        dense = dense.astype(float)
         if dense.shape[1] >= 2:
+            centered = dense - dense.mean(axis=0, keepdims=True)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
-                coords = PCA(n_components=2, random_state=42, svd_solver="full").fit_transform(dense)
+                with np.errstate(all="ignore"):
+                    _, _, vt = np.linalg.svd(centered, full_matrices=False)
+                    coords = centered @ vt[:2].T
+            coords = np.nan_to_num(coords, nan=0.0, posinf=0.0, neginf=0.0)
         else:
             coords = [[0, 0] for _ in range(len(working))]
         clustered = working.copy()

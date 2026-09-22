@@ -472,6 +472,27 @@ class ProductAnalyzerWindow(QMainWindow):
         splitter.addWidget(self._cluster_summary_panel(explanations))
         splitter.setSizes([900, 460])
         self.page_bodies["Clusters"].addWidget(splitter)
+
+        self._add_section("Clusters", "Generated cluster visuals", "Data-driven cluster views requested for presentation and technical review.")
+        row_one = QSplitter(Qt.Horizontal)
+        row_one.addWidget(self._web_chart_card("Scatter plot with cluster symbols", self.result.output_files.get("advanced_scatter_cluster")))
+        row_one.addWidget(self._web_chart_card("Colored cluster map", self.result.output_files.get("cluster_colored_map")))
+        row_one.setSizes([1, 1])
+        self.page_bodies["Clusters"].addWidget(row_one)
+
+        row_two = QSplitter(Qt.Horizontal)
+        row_two.addWidget(self._web_chart_card("Hierarchical dendrogram", self.result.output_files.get("cluster_dendrogram")))
+        row_two.addWidget(self._web_chart_card("Affinity heatmap", self.result.output_files.get("affinity_heatmap")))
+        row_two.setSizes([1, 1])
+        self.page_bodies["Clusters"].addWidget(row_two)
+
+        row_three = QSplitter(Qt.Horizontal)
+        row_three.addWidget(self._web_chart_card("Bubble cluster", self.result.output_files.get("cluster_bubble")))
+        row_three.addWidget(self._web_chart_card("Sankey by family/characteristics", self.result.output_files.get("cluster_sankey")))
+        row_three.setSizes([1, 1])
+        self.page_bodies["Clusters"].addWidget(row_three)
+        self.page_bodies["Clusters"].addWidget(self._web_chart_card("Cluster radar", self.result.output_files.get("cluster_radar")))
+
         self._add_section("Clusters", "Clustered products", "Point data behind the embedded scatter plot.")
         self._add_table("Clusters", self.result.clusters.get("points", []), max_height=360)
 

@@ -2,10 +2,10 @@ pandas
 openpyxl
 pymupdf
 scikit-learn
+scipy
 matplotlib
 plotly
 networkx
 PySide6
 pytest
 pyinstaller
-
