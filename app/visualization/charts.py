@@ -290,25 +290,27 @@ class ChartBuilder:
         visual = pd.DataFrame(rows)
         group_order = list(dict.fromkeys(visual["Group"]))
         colors = ["#2458d3", "#2ca58d", "#f2a541", "#b84a62", "#536dfe"]
-        plt.figure(figsize=(12, 7))
-        ax = plt.gca()
+        fig, axes = plt.subplots(2, 2, figsize=(13, 8))
+        axes_flat = list(axes.ravel())
         max_count = max(visual["Count"].max(), 1)
-        for gx, group in enumerate(group_order):
-            subset = visual[visual["Group"] == group].reset_index(drop=True)
-            for idx, row in subset.iterrows():
-                x = gx + (idx - (len(subset) - 1) / 2) * 0.17
-                y = row["Count"]
-                size = 520 + 2600 * row["Count"] / max_count
-                ax.scatter(x, y, s=size, color=colors[idx % len(colors)], alpha=0.78, edgecolor="white", linewidth=1.5)
-                ax.text(x, y, str(row["Count"]), ha="center", va="center", color="white", fontsize=10, weight="bold")
-                ax.text(x, max(0, y - max_count * 0.12), "\n".join(textwrap.wrap(row["Value"], 13)), ha="center", va="top", fontsize=8, color="#162033")
-        ax.set_title("Visual quantity bubbles: what dominates the focused category", fontsize=15, weight="bold", pad=14)
-        ax.set_xticks(range(len(group_order)))
-        ax.set_xticklabels(group_order, fontsize=11, weight="bold")
-        ax.set_ylabel("Codes")
-        ax.set_ylim(0, max_count * 1.35)
-        ax.grid(axis="y", alpha=0.2)
-        ax.spines[["top", "right", "left"]].set_visible(False)
+        for ax, group in zip(axes_flat, group_order):
+            subset = visual[visual["Group"] == group].sort_values("Count", ascending=True).reset_index(drop=True)
+            labels = ["\n".join(textwrap.wrap(str(value), 20)) for value in subset["Value"]]
+            y_positions = np.arange(len(subset))
+            sizes = 450 + 2200 * subset["Count"] / max_count
+            ax.scatter(subset["Count"], y_positions, s=sizes, color=colors[: len(subset)], alpha=0.78, edgecolor="white", linewidth=1.5, zorder=3)
+            ax.hlines(y_positions, 0, subset["Count"], color="#d9e1ec", linewidth=2, zorder=1)
+            for x_value, y_value, count in zip(subset["Count"], y_positions, subset["Count"]):
+                ax.text(x_value, y_value, str(int(count)), ha="center", va="center", color="white", fontsize=9, weight="bold")
+            ax.set_yticks(y_positions)
+            ax.set_yticklabels(labels, fontsize=8)
+            ax.set_xlim(0, max_count * 1.18)
+            ax.set_title(group, fontsize=12, weight="bold")
+            ax.grid(axis="x", alpha=0.18)
+            ax.spines[["top", "right", "left"]].set_visible(False)
+        for ax in axes_flat[len(group_order) :]:
+            ax.axis("off")
+        fig.suptitle("Visual quantity bubbles: dominant product characteristics", fontsize=16, weight="bold")
         plt.tight_layout()
         plt.savefig(path, dpi=170)
         plt.close()
@@ -351,7 +353,7 @@ class ChartBuilder:
             return self._empty_png(path, "No cluster story available")
         explanations = clusters.get("explanations", [])
         fig = plt.figure(figsize=(13, 7.5))
-        grid = fig.add_gridspec(1, 2, width_ratios=[1.15, 0.85])
+        grid = fig.add_gridspec(1, 2, width_ratios=[1.2, 0.8])
         ax = fig.add_subplot(grid[0, 0])
         colors = plt.cm.Set2(np.linspace(0, 1, max(2, points["Cluster"].nunique())))
         for idx, (cluster, group) in enumerate(points.groupby("Cluster")):
@@ -367,14 +369,23 @@ class ChartBuilder:
         ax_text = fig.add_subplot(grid[0, 1])
         ax_text.axis("off")
         ax_text.set_title("What each cluster means", fontsize=14, weight="bold", loc="left")
-        y = 0.92
+        y = 0.9
         for cluster in explanations[:5]:
-            common = cluster.get("Common", [])[:3]
+            common = [
+                item
+                for item in cluster.get("Common", [])
+                if item.get("Feature") not in {"Product Family", "Product Name"}
+            ][:3]
             title = f"Cluster {cluster.get('Cluster')} - {cluster.get('Products')} codes"
-            body = "; ".join(f"{item['Feature'].replace('Technical attribute ', 'Attr ')}={item['Value']}" for item in common)
-            ax_text.text(0.02, y, title, fontsize=11, weight="bold", color="#162033", transform=ax_text.transAxes)
-            ax_text.text(0.02, y - 0.055, "\n".join(textwrap.wrap(body or "Mixed configuration", 42)), fontsize=9, color="#637083", transform=ax_text.transAxes)
-            y -= 0.17
+            body = "\n".join(
+                textwrap.wrap(
+                    "; ".join(f"{item['Feature'].replace('Technical attribute ', 'Attr ')}={item['Value']}" for item in common) or "Mixed configuration",
+                    38,
+                )
+            )
+            ax_text.text(0.02, y, title, fontsize=10.5, weight="bold", color="#162033", transform=ax_text.transAxes)
+            ax_text.text(0.02, y - 0.045, body, fontsize=8.2, color="#637083", transform=ax_text.transAxes, linespacing=1.25)
+            y -= 0.18
         fig.suptitle("Visual cluster story: from quantities to product families", fontsize=16, weight="bold")
         plt.tight_layout()
         plt.savefig(path, dpi=170)
@@ -409,6 +420,12 @@ class ChartBuilder:
         scatter = ax.scatter(bubbles["PCA_X"], bubbles["PCA_Y"], s=sizes, c=np.arange(len(bubbles)), cmap="Set2", alpha=0.76, edgecolor="white", linewidth=1.4)
         for _, row in bubbles.iterrows():
             ax.text(row["PCA_X"], row["PCA_Y"], f"C{row['Cluster']}\n{row['Products']}", ha="center", va="center", fontsize=10, weight="bold", color="#162033")
+        x_min, x_max = float(bubbles["PCA_X"].min()), float(bubbles["PCA_X"].max())
+        y_min, y_max = float(bubbles["PCA_Y"].min()), float(bubbles["PCA_Y"].max())
+        x_pad = max(0.25, (x_max - x_min) * 0.12)
+        y_pad = max(0.22, (y_max - y_min) * 0.18)
+        ax.set_xlim(x_min - x_pad, x_max + x_pad)
+        ax.set_ylim(y_min - y_pad, y_max + y_pad)
         ax.set_title("Bubble cluster: size = number of codes", fontsize=14, weight="bold", pad=12)
         ax.set_xlabel("Cluster position X")
         ax.set_ylabel("Cluster position Y")
@@ -472,12 +489,12 @@ class ChartBuilder:
         plt.figure(figsize=(10, 8))
         ax = plt.gca()
         image = ax.imshow(similarity, cmap="Blues", vmin=0, vmax=1, aspect="auto")
-        tick_step = max(1, len(labels) // 14)
+        tick_step = max(1, len(labels) // 8)
         ticks = list(range(0, len(labels), tick_step))
         ax.set_xticks(ticks)
-        ax.set_xticklabels([labels[i] for i in ticks], rotation=60, ha="right", fontsize=7)
+        ax.set_xticklabels([labels[i] for i in ticks], rotation=45, ha="right", fontsize=6)
         ax.set_yticks(ticks)
-        ax.set_yticklabels([labels[i] for i in ticks], fontsize=7)
+        ax.set_yticklabels([labels[i] for i in ticks], fontsize=6)
         ax.set_title("Affinity heatmap by technical similarity", fontsize=14, weight="bold", pad=12)
         plt.colorbar(image, ax=ax, fraction=0.026, pad=0.02, label="Similarity")
         ax.spines[["top", "right", "left", "bottom"]].set_visible(False)
@@ -589,16 +606,30 @@ class ChartBuilder:
         if df.empty or len(dims) < 2:
             return self._empty_png(path, "No characteristic flow data available")
         chains = df[dims].astype(str).agg(" -> ".join, axis=1).value_counts().head(12).sort_values()
-        plt.figure(figsize=(12, 7))
-        labels = ["\n".join(textwrap.wrap(label, 52)) for label in chains.index]
-        bars = plt.barh(labels, chains.values, color="#2ca58d")
-        plt.title("Characteristic flow preview: most common paths", fontsize=14, weight="bold", pad=12)
-        plt.xlabel("Codes")
-        plt.grid(axis="x", alpha=0.2)
+        fig = plt.figure(figsize=(13, 7.5))
+        grid = fig.add_gridspec(1, 2, width_ratios=[0.9, 1.1])
+        ax = fig.add_subplot(grid[0, 0])
+        ax_legend = fig.add_subplot(grid[0, 1])
+        path_ids = [f"Path {idx + 1:02d}" for idx in range(len(chains))]
+        bars = ax.barh(path_ids, chains.values, color="#2ca58d")
+        ax.set_title("Most common configuration paths", fontsize=13, weight="bold", pad=10)
+        ax.set_xlabel("Codes")
+        ax.grid(axis="x", alpha=0.2)
         for bar in bars:
             width = bar.get_width()
-            plt.text(width + max(chains.values) * 0.02, bar.get_y() + bar.get_height() / 2, str(int(width)), va="center", fontsize=8)
-        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+            ax.text(width + max(chains.values) * 0.03, bar.get_y() + bar.get_height() / 2, str(int(width)), va="center", fontsize=8)
+        ax.spines[["top", "right", "left"]].set_visible(False)
+        ax_legend.axis("off")
+        ax_legend.set_title("Path legend", fontsize=13, weight="bold", loc="left", pad=10)
+        y = 0.96
+        for path_id, chain, count in zip(path_ids[::-1], chains.index[::-1], chains.values[::-1]):
+            wrapped = "\n".join(textwrap.wrap(str(chain), 54))
+            ax_legend.text(0.0, y, f"{path_id}  ({int(count)} code{'s' if int(count) != 1 else ''})", fontsize=8.4, weight="bold", color="#162033", transform=ax_legend.transAxes)
+            ax_legend.text(0.0, y - 0.035, wrapped, fontsize=7.2, color="#637083", transform=ax_legend.transAxes, linespacing=1.15)
+            y -= 0.078 + 0.025 * wrapped.count("\n")
+            if y < 0.03:
+                break
+        fig.suptitle("Characteristic flow preview", fontsize=15, weight="bold")
         plt.tight_layout()
         plt.savefig(path, dpi=165)
         plt.close()
