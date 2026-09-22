@@ -9,8 +9,9 @@ IS_FROZEN = bool(getattr(sys, "frozen", False))
 ROOT_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
 DATA_DIR = ROOT_DIR / "data"
 INPUT_DIR = DATA_DIR / "input"
-OUTPUT_DIR = (Path.home() / "Documents" / "ProductAnalyzer" / "output") if IS_FROZEN else DATA_DIR / "output"
-CACHE_DIR = DATA_DIR / "cache"
+USER_DATA_DIR = Path.home() / "Documents" / "ProductAnalyzer"
+OUTPUT_DIR = (USER_DATA_DIR / "output") if IS_FROZEN else DATA_DIR / "output"
+CACHE_DIR = (USER_DATA_DIR / "cache") if IS_FROZEN else DATA_DIR / "cache"
 
 
 @dataclass(frozen=True)
@@ -27,5 +28,8 @@ class DemoSettings:
 
 
 def ensure_directories() -> None:
-    for path in (INPUT_DIR, OUTPUT_DIR, CACHE_DIR):
+    writable_paths = (OUTPUT_DIR, CACHE_DIR)
+    if not IS_FROZEN:
+        writable_paths = (INPUT_DIR, *writable_paths)
+    for path in writable_paths:
         path.mkdir(parents=True, exist_ok=True)

@@ -13,7 +13,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
-from scipy.cluster.hierarchy import linkage
+from scipy.cluster.hierarchy import dendrogram, linkage
 from scipy.spatial.distance import pdist
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -49,6 +49,7 @@ class ChartBuilder:
             html = output_dir / "cluster_scatter.html"
             fig = px.scatter(points, x="PCA_X", y="PCA_Y", color="Cluster", hover_data=["PartNumber", "Product Family", "Product Type"])
             fig.write_html(html)
+            self._cluster_scatter_preview(points, html.with_suffix(".png"), "Cluster PCA scatter", symbol_labels=False)
             paths["cluster_scatter"] = html
         return paths
 
@@ -71,6 +72,9 @@ class ChartBuilder:
         paths["focus_product_type"] = self._bar(catalogue, "Product Type", output_dir / "isolating_cocks_product_type.png")
         paths["focus_coverage"] = self._focus_coverage(catalogue, output_dir / "isolating_cocks_demo_coverage.png", expected_count)
         paths["focus_characteristic_flow"] = self._focus_characteristic_flow(catalogue, output_dir / "isolating_cocks_characteristic_flow.html")
+        paths["visual_quantity_bubbles"] = self._visual_quantity_bubbles(catalogue, output_dir / "visual_quantity_bubbles.png")
+        paths["visual_distribution_panel"] = self._visual_distribution_panel(catalogue, output_dir / "visual_distribution_panel.png")
+        paths["visual_cluster_story"] = self._visual_cluster_story(catalogue, clusters, output_dir / "visual_cluster_story.png")
         paths.update(self._advanced_cluster_charts(catalogue, clusters, output_dir))
         return paths
 
@@ -119,6 +123,7 @@ class ChartBuilder:
         fig.update_traces(marker=dict(size=10, line=dict(width=0.8, color="white")))
         fig.update_layout(margin=dict(t=58, l=20, r=20, b=20), font=dict(size=12))
         fig.write_html(path)
+        self._cluster_scatter_preview(df, path.with_suffix(".png"), "Scatter plot with generated clusters", symbol_labels=True)
         return path
 
     def _cluster_colored_map(self, df: pd.DataFrame, path: Path) -> Path:
@@ -136,6 +141,7 @@ class ChartBuilder:
         fig.update_yaxes(visible=False)
         fig.update_layout(margin=dict(t=58, l=20, r=20, b=20), plot_bgcolor="#f4f7fb", font=dict(size=12))
         fig.write_html(path)
+        self._cluster_scatter_preview(df, path.with_suffix(".png"), "Manager view: colored cluster map", symbol_labels=False)
         return path
 
     def _cluster_bubble(self, df: pd.DataFrame, path: Path) -> Path:
@@ -167,6 +173,7 @@ class ChartBuilder:
         fig.update_traces(textposition="middle center", marker=dict(opacity=0.78, line=dict(width=1, color="white")))
         fig.update_layout(margin=dict(t=58, l=20, r=20, b=20), font=dict(size=12))
         fig.write_html(path)
+        self._bubble_preview(bubbles, path.with_suffix(".png"))
         return path
 
     def _cluster_sankey(self, df: pd.DataFrame, path: Path) -> Path:
@@ -207,6 +214,7 @@ class ChartBuilder:
         )
         fig.update_layout(title_text="Sankey: characteristics flowing into clusters", margin=dict(t=58, l=20, r=20, b=20), font=dict(size=11))
         fig.write_html(path)
+        self._sankey_preview(links, path.with_suffix(".png"))
         return path
 
     def _cluster_radar(self, df: pd.DataFrame, features: list[str], path: Path) -> Path:
@@ -228,6 +236,7 @@ class ChartBuilder:
             font=dict(size=12),
         )
         fig.write_html(path)
+        self._radar_preview(df, features, path.with_suffix(".png"))
         return path
 
     def _affinity_heatmap(self, df: pd.DataFrame, matrix: pd.DataFrame, path: Path) -> Path:
@@ -245,6 +254,7 @@ class ChartBuilder:
         )
         fig.update_layout(margin=dict(t=58, l=80, r=20, b=90), font=dict(size=9))
         fig.write_html(path)
+        self._affinity_heatmap_preview(df, similarity, path.with_suffix(".png"))
         return path
 
     def _cluster_dendrogram(self, df: pd.DataFrame, matrix: pd.DataFrame, path: Path) -> Path:
@@ -258,6 +268,232 @@ class ChartBuilder:
         fig = ff.create_dendrogram(dense, labels=labels, orientation="left", linkagefun=lambda _: link)
         fig.update_layout(title="Hierarchical dendrogram by technical affinity", margin=dict(t=58, l=120, r=20, b=30), font=dict(size=10), height=980)
         fig.write_html(path)
+        self._dendrogram_preview(link, labels, path.with_suffix(".png"))
+        return path
+
+    def _visual_quantity_bubbles(self, df: pd.DataFrame, path: Path) -> Path:
+        columns = [
+            ("Product Type", "Product type"),
+            ("Technical attribute 1", "Diameter"),
+            ("Technical attribute 2", "Drain"),
+            ("Technical attribute 4", "Handle"),
+        ]
+        rows: list[dict[str, Any]] = []
+        for column, label in columns:
+            if column not in df.columns:
+                continue
+            for value, count in df[column].replace("", "UNKNOWN").value_counts().head(5).items():
+                rows.append({"Group": label, "Value": str(value), "Count": int(count)})
+        if not rows:
+            return self._empty_png(path, "No quantity distributions available")
+
+        visual = pd.DataFrame(rows)
+        group_order = list(dict.fromkeys(visual["Group"]))
+        colors = ["#2458d3", "#2ca58d", "#f2a541", "#b84a62", "#536dfe"]
+        plt.figure(figsize=(12, 7))
+        ax = plt.gca()
+        max_count = max(visual["Count"].max(), 1)
+        for gx, group in enumerate(group_order):
+            subset = visual[visual["Group"] == group].reset_index(drop=True)
+            for idx, row in subset.iterrows():
+                x = gx + (idx - (len(subset) - 1) / 2) * 0.17
+                y = row["Count"]
+                size = 520 + 2600 * row["Count"] / max_count
+                ax.scatter(x, y, s=size, color=colors[idx % len(colors)], alpha=0.78, edgecolor="white", linewidth=1.5)
+                ax.text(x, y, str(row["Count"]), ha="center", va="center", color="white", fontsize=10, weight="bold")
+                ax.text(x, max(0, y - max_count * 0.12), "\n".join(textwrap.wrap(row["Value"], 13)), ha="center", va="top", fontsize=8, color="#162033")
+        ax.set_title("Visual quantity bubbles: what dominates the focused category", fontsize=15, weight="bold", pad=14)
+        ax.set_xticks(range(len(group_order)))
+        ax.set_xticklabels(group_order, fontsize=11, weight="bold")
+        ax.set_ylabel("Codes")
+        ax.set_ylim(0, max_count * 1.35)
+        ax.grid(axis="y", alpha=0.2)
+        ax.spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=170)
+        plt.close()
+        return path
+
+    def _visual_distribution_panel(self, df: pd.DataFrame, path: Path) -> Path:
+        columns = [
+            ("Product Type", "Product type distribution"),
+            ("Technical attribute 1", "Diameter distribution"),
+            ("Technical attribute 2", "Drain distribution"),
+            ("Technical attribute 4", "Handle distribution"),
+        ]
+        available = [(column, title) for column, title in columns if column in df.columns]
+        if not available:
+            return self._empty_png(path, "No distribution data available")
+        fig, axes = plt.subplots(2, 2, figsize=(13, 8))
+        axes_flat = list(axes.ravel())
+        palette = ["#2458d3", "#2ca58d", "#f2a541", "#b84a62", "#536dfe", "#64748b"]
+        for ax, (column, title) in zip(axes_flat, available):
+            counts = df[column].replace("", "UNKNOWN").value_counts().head(6).sort_values()
+            labels = ["\n".join(textwrap.wrap(str(label), 18)) for label in counts.index]
+            bars = ax.barh(labels, counts.values, color=palette[: len(counts)])
+            ax.set_title(title, fontsize=12, weight="bold")
+            ax.grid(axis="x", alpha=0.18)
+            ax.spines[["top", "right", "left"]].set_visible(False)
+            for bar in bars:
+                width = bar.get_width()
+                ax.text(width + max(counts.values) * 0.02, bar.get_y() + bar.get_height() / 2, str(int(width)), va="center", fontsize=8)
+        for ax in axes_flat[len(available) :]:
+            ax.axis("off")
+        fig.suptitle("Manager visual layer: quantity distributions", fontsize=16, weight="bold")
+        plt.tight_layout()
+        plt.savefig(path, dpi=170)
+        plt.close()
+        return path
+
+    def _visual_cluster_story(self, df: pd.DataFrame, clusters: dict[str, Any], path: Path) -> Path:
+        points = pd.DataFrame(clusters.get("points", []))
+        if points.empty:
+            return self._empty_png(path, "No cluster story available")
+        explanations = clusters.get("explanations", [])
+        fig = plt.figure(figsize=(13, 7.5))
+        grid = fig.add_gridspec(1, 2, width_ratios=[1.15, 0.85])
+        ax = fig.add_subplot(grid[0, 0])
+        colors = plt.cm.Set2(np.linspace(0, 1, max(2, points["Cluster"].nunique())))
+        for idx, (cluster, group) in enumerate(points.groupby("Cluster")):
+            ax.scatter(group["PCA_X"], group["PCA_Y"], s=150, alpha=0.84, label=f"Cluster {cluster}", color=colors[idx], edgecolor="white", linewidth=1.2)
+            ax.text(group["PCA_X"].mean(), group["PCA_Y"].mean(), f"C{cluster}\n{len(group)}", ha="center", va="center", fontsize=10, weight="bold", color="#162033")
+        ax.set_title("Natural product groups", fontsize=14, weight="bold")
+        ax.set_xlabel("Similarity axis X")
+        ax.set_ylabel("Similarity axis Y")
+        ax.grid(alpha=0.18)
+        ax.legend(loc="best", fontsize=9)
+        ax.spines[["top", "right"]].set_visible(False)
+
+        ax_text = fig.add_subplot(grid[0, 1])
+        ax_text.axis("off")
+        ax_text.set_title("What each cluster means", fontsize=14, weight="bold", loc="left")
+        y = 0.92
+        for cluster in explanations[:5]:
+            common = cluster.get("Common", [])[:3]
+            title = f"Cluster {cluster.get('Cluster')} - {cluster.get('Products')} codes"
+            body = "; ".join(f"{item['Feature'].replace('Technical attribute ', 'Attr ')}={item['Value']}" for item in common)
+            ax_text.text(0.02, y, title, fontsize=11, weight="bold", color="#162033", transform=ax_text.transAxes)
+            ax_text.text(0.02, y - 0.055, "\n".join(textwrap.wrap(body or "Mixed configuration", 42)), fontsize=9, color="#637083", transform=ax_text.transAxes)
+            y -= 0.17
+        fig.suptitle("Visual cluster story: from quantities to product families", fontsize=16, weight="bold")
+        plt.tight_layout()
+        plt.savefig(path, dpi=170)
+        plt.close()
+        return path
+
+    def _cluster_scatter_preview(self, df: pd.DataFrame, path: Path, title: str, symbol_labels: bool) -> Path:
+        plt.figure(figsize=(10.5, 6.5))
+        ax = plt.gca()
+        colors = plt.cm.Set2(np.linspace(0, 1, max(2, df["Cluster"].nunique())))
+        markers = ["o", "^", "s", "D", "P", "X", "v"]
+        for idx, (cluster, group) in enumerate(df.groupby("Cluster")):
+            marker = markers[idx % len(markers)] if symbol_labels else "o"
+            ax.scatter(group["PCA_X"], group["PCA_Y"], s=115 if symbol_labels else 190, marker=marker, color=colors[idx], alpha=0.86, label=f"Cluster {cluster}", edgecolor="white", linewidth=1)
+        ax.set_title(title, fontsize=14, weight="bold", pad=12)
+        ax.set_xlabel("PCA X")
+        ax.set_ylabel("PCA Y")
+        ax.grid(alpha=0.2)
+        ax.legend(loc="best", fontsize=9)
+        ax.spines[["top", "right"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _bubble_preview(self, bubbles: pd.DataFrame, path: Path) -> Path:
+        if bubbles.empty:
+            return self._empty_png(path, "No bubble data available")
+        plt.figure(figsize=(10.5, 6.5))
+        ax = plt.gca()
+        sizes = 900 + 3600 * bubbles["Products"] / max(1, bubbles["Products"].max())
+        scatter = ax.scatter(bubbles["PCA_X"], bubbles["PCA_Y"], s=sizes, c=np.arange(len(bubbles)), cmap="Set2", alpha=0.76, edgecolor="white", linewidth=1.4)
+        for _, row in bubbles.iterrows():
+            ax.text(row["PCA_X"], row["PCA_Y"], f"C{row['Cluster']}\n{row['Products']}", ha="center", va="center", fontsize=10, weight="bold", color="#162033")
+        ax.set_title("Bubble cluster: size = number of codes", fontsize=14, weight="bold", pad=12)
+        ax.set_xlabel("Cluster position X")
+        ax.set_ylabel("Cluster position Y")
+        ax.grid(alpha=0.2)
+        ax.spines[["top", "right"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _sankey_preview(self, links: dict[tuple[str, str], int], path: Path) -> Path:
+        if not links:
+            return self._empty_png(path, "No flow data available")
+        top = pd.DataFrame([{"Flow": f"{source} -> {target}", "Codes": value} for (source, target), value in links.items()])
+        top = top.sort_values("Codes").tail(14)
+        plt.figure(figsize=(11, 7))
+        labels = ["\n".join(textwrap.wrap(flow, 42)) for flow in top["Flow"]]
+        bars = plt.barh(labels, top["Codes"], color="#2458d3")
+        plt.title("Sankey preview: strongest characteristic flows", fontsize=14, weight="bold", pad=12)
+        plt.xlabel("Codes")
+        plt.grid(axis="x", alpha=0.2)
+        for bar in bars:
+            width = bar.get_width()
+            plt.text(width + max(top["Codes"]) * 0.02, bar.get_y() + bar.get_height() / 2, str(int(width)), va="center", fontsize=8)
+        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _radar_preview(self, df: pd.DataFrame, features: list[str], path: Path) -> Path:
+        categories = ["Completeness", "Drain variety", "Contact variety", "Handle variety", "Type concentration"]
+        angles = np.linspace(0, 2 * np.pi, len(categories), endpoint=False).tolist()
+        angles += angles[:1]
+        fig, ax = plt.subplots(figsize=(7.8, 7.8), subplot_kw=dict(polar=True))
+        for cluster, group in df.groupby("Cluster"):
+            technical = [c for c in features if c.startswith("Technical attribute") and c in group.columns]
+            completeness = float((group[technical].replace("UNKNOWN", pd.NA).notna().mean().mean() if technical else 0) * 100)
+            values = [
+                completeness,
+                self._normalized_unique(group, "Technical attribute 2"),
+                self._normalized_unique(group, "Technical attribute 3"),
+                self._normalized_unique(group, "Technical attribute 4"),
+                self._top_share(group, "Product Type") * 100,
+            ]
+            values += values[:1]
+            ax.plot(angles, values, linewidth=2, label=f"Cluster {cluster}")
+            ax.fill(angles, values, alpha=0.12)
+        ax.set_title("Cluster radar comparison", fontsize=14, weight="bold", pad=24)
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(categories, fontsize=9)
+        ax.set_ylim(0, 100)
+        ax.legend(loc="upper right", bbox_to_anchor=(1.28, 1.12), fontsize=8)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _affinity_heatmap_preview(self, df: pd.DataFrame, similarity: np.ndarray, path: Path) -> Path:
+        labels = df["PartNumber"].astype(str).tolist()
+        plt.figure(figsize=(10, 8))
+        ax = plt.gca()
+        image = ax.imshow(similarity, cmap="Blues", vmin=0, vmax=1, aspect="auto")
+        tick_step = max(1, len(labels) // 14)
+        ticks = list(range(0, len(labels), tick_step))
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([labels[i] for i in ticks], rotation=60, ha="right", fontsize=7)
+        ax.set_yticks(ticks)
+        ax.set_yticklabels([labels[i] for i in ticks], fontsize=7)
+        ax.set_title("Affinity heatmap by technical similarity", fontsize=14, weight="bold", pad=12)
+        plt.colorbar(image, ax=ax, fraction=0.026, pad=0.02, label="Similarity")
+        ax.spines[["top", "right", "left", "bottom"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _dendrogram_preview(self, link: np.ndarray, labels: list[str], path: Path) -> Path:
+        plt.figure(figsize=(11, 9))
+        dendrogram(link, labels=labels, orientation="left", leaf_font_size=7, color_threshold=None)
+        plt.title("Hierarchical dendrogram by technical affinity", fontsize=14, weight="bold", pad=12)
+        plt.xlabel("Distance")
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
         return path
 
     def _normalized_unique(self, df: pd.DataFrame, column: str) -> float:
@@ -326,6 +562,7 @@ class ChartBuilder:
         )
         fig.update_layout(margin=dict(t=56, l=10, r=10, b=10), font=dict(size=12))
         fig.write_html(path)
+        self._flow_preview(working, dims, path.with_suffix(".png"))
         return path
 
     def _treemap(self, df: pd.DataFrame, path: Path) -> Path:
@@ -345,6 +582,46 @@ class ChartBuilder:
         )
         fig.update_layout(margin=dict(t=48, l=10, r=10, b=10), font=dict(size=13))
         fig.write_html(path)
+        self._treemap_preview(grouped, path.with_suffix(".png"))
+        return path
+
+    def _flow_preview(self, df: pd.DataFrame, dims: list[str], path: Path) -> Path:
+        if df.empty or len(dims) < 2:
+            return self._empty_png(path, "No characteristic flow data available")
+        chains = df[dims].astype(str).agg(" -> ".join, axis=1).value_counts().head(12).sort_values()
+        plt.figure(figsize=(12, 7))
+        labels = ["\n".join(textwrap.wrap(label, 52)) for label in chains.index]
+        bars = plt.barh(labels, chains.values, color="#2ca58d")
+        plt.title("Characteristic flow preview: most common paths", fontsize=14, weight="bold", pad=12)
+        plt.xlabel("Codes")
+        plt.grid(axis="x", alpha=0.2)
+        for bar in bars:
+            width = bar.get_width()
+            plt.text(width + max(chains.values) * 0.02, bar.get_y() + bar.get_height() / 2, str(int(width)), va="center", fontsize=8)
+        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _treemap_preview(self, grouped: pd.DataFrame, path: Path) -> Path:
+        if grouped.empty:
+            return self._empty_png(path, "No hierarchy data available")
+        label_column = "Product Type" if "Product Type" in grouped.columns else grouped.columns[0]
+        top = grouped.groupby(label_column)["Records"].sum().sort_values().tail(16)
+        plt.figure(figsize=(11, 7))
+        labels = ["\n".join(textwrap.wrap(str(label), 34)) for label in top.index]
+        bars = plt.barh(labels, top.values, color="#2458d3")
+        plt.title("Catalogue hierarchy preview: largest product groups", fontsize=14, weight="bold", pad=12)
+        plt.xlabel("Records")
+        plt.grid(axis="x", alpha=0.2)
+        for bar in bars:
+            width = bar.get_width()
+            plt.text(width + max(top.values) * 0.02, bar.get_y() + bar.get_height() / 2, str(int(width)), va="center", fontsize=8)
+        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
         return path
 
     def _attribute_completeness(self, df: pd.DataFrame, path: Path) -> Path:

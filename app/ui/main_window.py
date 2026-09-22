@@ -39,7 +39,7 @@ except Exception:  # pragma: no cover - optional runtime dependency in some pack
     QWebEngineView = None
 
 from app.services.demo_runner import DemoRunner
-from app.config.settings import DemoSettings
+from app.config.settings import DemoSettings, IS_FROZEN
 
 
 PALETTE = {
@@ -107,6 +107,7 @@ class ProductAnalyzerWindow(QMainWindow):
 
         for name in [
             "Dashboard",
+            "Visual Summary",
             "PDF Import",
             "Extraction Review",
             "Generated Catalogue",
@@ -282,6 +283,7 @@ class ProductAnalyzerWindow(QMainWindow):
         for name in self.page_bodies:
             self._clear_page(name)
         self._dashboard()
+        self._visual_summary()
         self._pdf_import()
         self._review()
         self._generated_catalogue()
@@ -327,6 +329,41 @@ class ProductAnalyzerWindow(QMainWindow):
         match_rows = [m.__dict__ for m in r.matches]
         self._add_section("Dashboard", "PDF to catalogue mapping", "Direct and inferred matching states from the current demo run.")
         self._add_table("Dashboard", match_rows, max_height=220)
+
+    def _visual_summary(self) -> None:
+        focus = self.result.demo_focus
+        self._add_metric_grid(
+            "Visual Summary",
+            [
+                ("Visual level", "Manager", "Fast quantity/distribution reading"),
+                ("Technical level", "Engineer", "Detailed clusters and evidence remain available"),
+                ("Focused codes", focus.get("found_codes", 0), "Rows used to generate these visuals"),
+                ("Expected scope", focus.get("expected_codes", 0), "Meeting brief target"),
+            ],
+            columns=4,
+        )
+        self._add_section(
+            "Visual Summary",
+            "Two-level client view",
+            "This page is built for people who do not know the product technically: bubbles and distributions first, then the cluster story. Technical pages keep the detailed tables, rules, and evidence.",
+        )
+        top = QSplitter(Qt.Horizontal)
+        top.addWidget(self._chart_card("Quantity bubbles", self.result.output_files.get("visual_quantity_bubbles")))
+        top.addWidget(self._chart_card("Distribution panel", self.result.output_files.get("visual_distribution_panel")))
+        top.setSizes([1, 1])
+        self.page_bodies["Visual Summary"].addWidget(top)
+
+        middle = QSplitter(Qt.Horizontal)
+        middle.addWidget(self._chart_card("Visual cluster story", self.result.output_files.get("visual_cluster_story")))
+        middle.addWidget(self._chart_card("Demo scope check", self.result.output_files.get("focus_coverage")))
+        middle.setSizes([2, 1])
+        self.page_bodies["Visual Summary"].addWidget(middle)
+
+        bottom = QSplitter(Qt.Horizontal)
+        bottom.addWidget(self._chart_card("Colored cluster map", self._static_preview_path(self.result.output_files.get("cluster_colored_map"))))
+        bottom.addWidget(self._chart_card("Bubble cluster", self._static_preview_path(self.result.output_files.get("cluster_bubble"))))
+        bottom.setSizes([1, 1])
+        self.page_bodies["Visual Summary"].addWidget(bottom)
 
     def _pdf_import(self) -> None:
         self._upload_panel("PDF Import")
@@ -651,16 +688,45 @@ class ProductAnalyzerWindow(QMainWindow):
         layout = QVBoxLayout(card)
         layout.addWidget(self._label(title, "PanelTitle"))
         path_obj = Path(path) if path else None
-        if QWebEngineView and path_obj and path_obj.exists() and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+        preview_path = self._static_preview_path(path_obj)
+        if IS_FROZEN:
+            if preview_path and preview_path.exists():
+                image = QLabel()
+                image.setAlignment(Qt.AlignCenter)
+                pixmap = QPixmap(str(preview_path))
+                image.setPixmap(pixmap.scaled(760, 520, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                image.setMinimumHeight(500)
+                layout.addWidget(image, 1)
+            elif path_obj and path_obj.exists():
+                layout.addWidget(self._empty_state(f"Interactive chart exported as {path_obj.name}. Open the output folder for the browser version."))
+            else:
+                layout.addWidget(self._empty_state("Cluster chart not generated yet."))
+        elif QWebEngineView and path_obj and path_obj.exists() and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
             view = QWebEngineView()
             view.setMinimumHeight(520)
             view.load(QUrl.fromLocalFile(str(path_obj.resolve())))
             layout.addWidget(view, 1)
+        elif preview_path and preview_path.exists():
+            image = QLabel()
+            image.setAlignment(Qt.AlignCenter)
+            pixmap = QPixmap(str(preview_path))
+            image.setPixmap(pixmap.scaled(760, 520, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            image.setMinimumHeight(500)
+            layout.addWidget(image, 1)
         elif path_obj and path_obj.exists():
             layout.addWidget(self._empty_state(f"Interactive chart is available at {path_obj.name}. Open it from the output folder."))
         else:
             layout.addWidget(self._empty_state("Cluster chart not generated yet."))
         return card
+
+    def _static_preview_path(self, path: Path | None) -> Path | None:
+        if not path:
+            return None
+        path_obj = Path(path)
+        if path_obj.suffix.lower() in {".png", ".jpg", ".jpeg"}:
+            return path_obj
+        preview = path_obj.with_suffix(".png")
+        return preview if preview.exists() else None
 
     def _cluster_summary_panel(self, explanations: list[dict[str, Any]]) -> QFrame:
         panel = self._panel()
@@ -857,6 +923,7 @@ class ProductAnalyzerWindow(QMainWindow):
     def _page_description(self, name: str) -> str:
         descriptions = {
             "Dashboard": "Demo overview for the isolating-cock scope, PDF extraction, matching, review queue, and focused analytics.",
+            "Visual Summary": "Client-facing visual layer with bubbles, distributions, and cluster story generated from the focused catalogue data.",
             "PDF Import": "Drawing-level ingestion status, detected identifiers, variants, warnings, and component extraction counts.",
             "Extraction Review": "Evidence-backed characteristic decisions. Low-confidence values stay visible for engineer validation.",
             "Generated Catalogue": "Catalogue-compatible output using the source Excel columns and terminology.",
@@ -879,6 +946,11 @@ class ProductAnalyzerWindow(QMainWindow):
                 "Shows the whole demo status in one place.\n\n"
                 "It confirms the focus category, target code count, rows found in Excel, missing gap, PDFs analyzed, generated rows, clusters, review fields, and anomalies.\n\n"
                 "Use this page to explain the demo story quickly: source Excel loaded, isolating cocks filtered, drawings mapped, charts generated."
+            ),
+            "Visual Summary": (
+                "Shows the manager-friendly visual layer requested by the client.\n\n"
+                "Quantity bubbles show which product types and characteristics dominate; the distribution panel breaks down product type, diameter, drain, and handle counts; the cluster story turns the technical PCA clusters into a readable family map.\n\n"
+                "Use this page first with non-technical viewers, then move to Clusters or Characteristic Analysis for the engineering detail."
             ),
             "PDF Import": (
                 "Shows which drawing PDFs are being analyzed.\n\n"
