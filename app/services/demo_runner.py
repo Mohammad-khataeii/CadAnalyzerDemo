@@ -79,7 +79,7 @@ class DemoRunner:
         output_files["focus_catalogue_csv"] = output_dir / "focus_catalogue.csv"
         output_files["focus_catalogue_xlsx"] = output_dir / "focus_catalogue.xlsx"
         generated.to_csv(output_files["catalogue_csv"], index=False)
-        generated.to_excel(output_files["catalogue_xlsx"], index=False)
+        self._write_catalogue_workbook(output_files["catalogue_xlsx"], generated, analyses, matches, evidence, anomalies)
         analysis_catalogue.to_csv(output_files["focus_catalogue_csv"], index=False)
         analysis_catalogue.to_excel(output_files["focus_catalogue_xlsx"], index=False)
         evidence.to_csv(output_files["evidence_csv"], index=False)
@@ -140,8 +140,71 @@ class DemoRunner:
             row["Maturity"] = "EXTRACTED"
             row["Preferred"] = "NEEDS REVIEW"
             row["Q.,ty in 2026"] = ""
+            row.update(self._analysis_columns(analysis, match))
             rows.append(row)
-        return pd.DataFrame(rows, columns=catalogue.columns)
+        return pd.DataFrame(rows)
+
+    def _analysis_columns(self, analysis: Any, match: Any) -> dict[str, Any]:
+        evidence = analysis.evidence
+        avg_confidence = round(sum(ev.confidence for ev in evidence) / max(1, len(evidence)), 2)
+        review_fields = sorted(field for field, value in analysis.fields.items() if value in {"UNKNOWN", "NOT_FOUND", "NEEDS REVIEW"})
+        return {
+            "Source PDF": analysis.source_pdf.name,
+            "PDF Page Count": analysis.page_count,
+            "Catalogue Match Status": match.status if match else "UNMATCHED",
+            "Catalogue Match Reason": match.reason if match else "No match object",
+            "Catalogue Candidate Count": match.candidate_count if match else 0,
+            "Matched PartNumber": match.matched_part_number if match else "",
+            "Matched Master PN": match.matched_master_pn if match else "",
+            "Drawing number": analysis.fields.get("Drawing number", ""),
+            "Drawing revision": analysis.fields.get("Drawing revision", ""),
+            "Drawing title": analysis.fields.get("Drawing title", ""),
+            "Extracted diameter": analysis.fields.get("Diameter", ""),
+            "Extracted LED": analysis.fields.get("LED", ""),
+            "Extracted pressure": analysis.fields.get("Pressure", ""),
+            "Extracted mounting": analysis.fields.get("Mounting", ""),
+            "Extracted drain": analysis.fields.get("Drain", ""),
+            "Extracted contact": analysis.fields.get("Contact", ""),
+            "Extracted handle": analysis.fields.get("Handle", ""),
+            "Detected identifiers": ", ".join(analysis.part_numbers),
+            "Detected variants": ", ".join(analysis.variants),
+            "BOM row count": len(analysis.bom_rows),
+            "BOM component identifiers": ", ".join(str(row.get("ComponentPartNumber", "")) for row in analysis.bom_rows[:30]),
+            "Average extraction confidence": avg_confidence,
+            "Fields needing review": ", ".join(review_fields),
+            "PDF warnings": "; ".join(analysis.warnings),
+            "Analysis note": "Generated from PDF extraction; sample Excel used only as schema/reference.",
+        }
+
+    def _write_catalogue_workbook(self, path: Path, generated: pd.DataFrame, analyses: list[Any], matches: list[Any], evidence: pd.DataFrame, anomalies: list[dict[str, Any]]) -> None:
+        pdf_summary = pd.DataFrame(
+            [
+                {
+                    "Source PDF": analysis.source_pdf.name,
+                    "Pages": analysis.page_count,
+                    "Drawing number": analysis.fields.get("Drawing number", ""),
+                    "Drawing title": analysis.fields.get("Drawing title", ""),
+                    "Product Family": analysis.fields.get("Product Family", ""),
+                    "Product Name": analysis.fields.get("Product Name", ""),
+                    "Product Type": analysis.fields.get("Product Type", ""),
+                    "Identifiers": ", ".join(analysis.part_numbers),
+                    "Variants": ", ".join(analysis.variants),
+                    "BOM rows": len(analysis.bom_rows),
+                    "Warnings": "; ".join(analysis.warnings),
+                }
+                for analysis in analyses
+            ]
+        )
+        bom_rows = pd.DataFrame([row for analysis in analyses for row in analysis.bom_rows])
+        match_rows = pd.DataFrame([match.__dict__ for match in matches])
+        anomaly_rows = pd.DataFrame(anomalies)
+        with pd.ExcelWriter(path, engine="openpyxl") as writer:
+            generated.to_excel(writer, sheet_name="PDF Catalogue", index=False)
+            pdf_summary.to_excel(writer, sheet_name="PDF Summary", index=False)
+            evidence.to_excel(writer, sheet_name="Extraction Evidence", index=False)
+            (bom_rows if not bom_rows.empty else pd.DataFrame(columns=["SourcePDF", "ComponentPartNumber", "Quantity", "Description", "Specification", "ABC class", "EvidenceText"])).to_excel(writer, sheet_name="BOM Components", index=False)
+            (match_rows if not match_rows.empty else pd.DataFrame(columns=["source_pdf", "status", "matched_part_number", "matched_master_pn", "reason", "candidate_count"])).to_excel(writer, sheet_name="Matches", index=False)
+            (anomaly_rows if not anomaly_rows.empty else pd.DataFrame(columns=["Type", "Severity", "Evidence"])).to_excel(writer, sheet_name="Anomalies", index=False)
 
     def _map_technical_attributes(self, row: dict[str, Any], analysis: Any) -> None:
         product_name = analysis.fields.get("Product Name", "")
