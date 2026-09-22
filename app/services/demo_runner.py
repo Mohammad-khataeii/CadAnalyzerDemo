@@ -45,7 +45,7 @@ class DemoRunner:
         catalogue, profile = CatalogueLoader().load(self.settings.catalogue_path)
         focus_catalogue = self._focus_catalogue(catalogue)
         demo_focus = self._build_demo_focus(catalogue, focus_catalogue)
-        advance("Loaded catalogue and isolated demo category")
+        advance(f"Loaded catalogue and isolated {self.settings.focus_product_name} category")
         pdf_analyzer = PDFAnalyzer()
         analyses = []
         for path in pdf_paths:
@@ -59,9 +59,9 @@ class DemoRunner:
         generated = self._build_generated_catalogue(catalogue, analyses, matches)
         advance("Generated catalogue-compatible rows")
         rule_results = RuleDiscoveryEngine().discover(focus_catalogue)
-        advance("Discovered isolating cock PartNumber rules")
+        advance("Discovered focused category PartNumber rules")
         clusters = ClusteringEngine().run(focus_catalogue, method="kmeans", n_clusters=5)
-        advance("Computed isolating cock clusters and PCA projection")
+        advance("Computed focused category clusters and PCA projection")
         similarity = SimilarityEngine().find_similar(focus_catalogue)
         advance("Computed technical similarity")
         anomalies = AnomalyDetector().detect(focus_catalogue, analyses, rule_results)
@@ -76,8 +76,8 @@ class DemoRunner:
         output_files["analysis_json"] = output_dir / "analysis_results.json"
         output_files["anomalies_csv"] = output_dir / "anomalies.csv"
         output_files["bom_csv"] = output_dir / "bom_components.csv"
-        output_files["focus_catalogue_csv"] = output_dir / "isolating_cocks_catalogue.csv"
-        output_files["focus_catalogue_xlsx"] = output_dir / "isolating_cocks_catalogue.xlsx"
+        output_files["focus_catalogue_csv"] = output_dir / "focus_catalogue.csv"
+        output_files["focus_catalogue_xlsx"] = output_dir / "focus_catalogue.xlsx"
         generated.to_csv(output_files["catalogue_csv"], index=False)
         generated.to_excel(output_files["catalogue_xlsx"], index=False)
         focus_catalogue.to_csv(output_files["focus_catalogue_csv"], index=False)
@@ -90,9 +90,10 @@ class DemoRunner:
         bom_rows = [row for a in analyses for row in a.bom_rows]
         chart_builder = ChartBuilder()
         chart_paths = chart_builder.build_all(focus_catalogue, clusters, output_dir, anomalies=anomalies, evidence=evidence, bom_rows=bom_rows, rule_results=rule_results)
-        chart_paths.update(chart_builder.build_demo_focus(focus_catalogue, clusters, output_dir, self.settings.focus_expected_count))
+        chart_paths.update(chart_builder.build_demo_focus(focus_catalogue, clusters, output_dir, self.settings.focus_expected_count, self.settings.focus_product_name))
         output_files.update(chart_paths)
-        advance("Generated isolating cock visual analytics")
+        output_files.update(chart_builder.build_visual_packs(output_files, output_dir, self.settings.focus_product_name))
+        advance("Generated focused category visual analytics")
 
         result = DemoRunResult(
             catalogue_profile=profile,
@@ -123,16 +124,18 @@ class DemoRunner:
             match = match_by_pdf.get(analysis.source_pdf.name)
             row = self._matched_catalogue_base(catalogue, match) if match else {column: "" for column in catalogue.columns}
             row["OPS Product Category"] = row.get("OPS Product Category") or "C - BRAKE CONTROL"
-            row["Product Family"] = self._known_or_existing(analysis.fields.get("Product Family"), row.get("Product Family"))
-            row["Product Name"] = self._known_or_existing(analysis.fields.get("Product Name"), row.get("Product Name"))
-            row["Product Type"] = self._known_or_existing(analysis.fields.get("Product Type"), row.get("Product Type"))
-            row["Technical attribute 1"] = self._known_or_existing(analysis.fields.get("Diameter"), row.get("Technical attribute 1"))
-            row["Technical attribute 2"] = self._known_or_existing(analysis.fields.get("Drain"), row.get("Technical attribute 2"))
-            row["Technical attribute 3"] = self._known_or_existing(analysis.fields.get("Contact"), row.get("Technical attribute 3"))
-            row["Technical attribute 4"] = self._known_or_existing(analysis.fields.get("Handle"), row.get("Technical attribute 4"))
+            if match and match.matched_part_number:
+                row["Product Family"] = self._existing_or_known(row.get("Product Family"), analysis.fields.get("Product Family"))
+                row["Product Name"] = self._existing_or_known(row.get("Product Name"), analysis.fields.get("Product Name"))
+                row["Product Type"] = self._existing_or_known(row.get("Product Type"), analysis.fields.get("Product Type"))
+            else:
+                row["Product Family"] = self._known_or_existing(analysis.fields.get("Product Family"), row.get("Product Family"))
+                row["Product Name"] = self._known_or_existing(analysis.fields.get("Product Name"), row.get("Product Name"))
+                row["Product Type"] = self._known_or_existing(analysis.fields.get("Product Type"), row.get("Product Type"))
+            self._map_technical_attributes(row, analysis)
             row["Configurability sheet"] = "EXTRACTED FROM PDF - REVIEW REQUIRED"
-            row["PartNumber"] = self._primary_part(analysis.part_numbers, analysis.fields.get("Drawing number", "UNKNOWN"))
-            row["Master PN"] = self._master_part(analysis.part_numbers, analysis.fields.get("Drawing number", "UNKNOWN"))
+            row["PartNumber"] = match.matched_part_number if match and match.matched_part_number else self._primary_part(analysis.part_numbers, analysis.fields.get("Drawing number", "UNKNOWN"))
+            row["Master PN"] = match.matched_master_pn if match and match.matched_master_pn else self._master_part(analysis.part_numbers, analysis.fields.get("Drawing number", "UNKNOWN"))
             row["Maturity"] = "EXTRACTED"
             row["Preferred"] = "NEEDS REVIEW"
             row["Q.,ty in 2026"] = ""
@@ -155,6 +158,19 @@ class DemoRunner:
             extension_rows.append(base)
         return pd.DataFrame(rows + extension_rows, columns=catalogue.columns)
 
+    def _map_technical_attributes(self, row: dict[str, Any], analysis: Any) -> None:
+        product_name = analysis.fields.get("Product Name", "")
+        if product_name == "D - MANOMETERS":
+            row["Technical attribute 1"] = self._known_or_existing(analysis.fields.get("Diameter"), row.get("Technical attribute 1"))
+            row["Technical attribute 2"] = self._known_or_existing(analysis.fields.get("LED"), row.get("Technical attribute 2"))
+            row["Technical attribute 3"] = self._known_or_existing(analysis.fields.get("Pressure"), row.get("Technical attribute 3"))
+            row["Technical attribute 4"] = self._known_or_existing(analysis.fields.get("Mounting"), row.get("Technical attribute 4"))
+            return
+        row["Technical attribute 1"] = self._known_or_existing(analysis.fields.get("Diameter"), row.get("Technical attribute 1"))
+        row["Technical attribute 2"] = self._known_or_existing(analysis.fields.get("Drain"), row.get("Technical attribute 2"))
+        row["Technical attribute 3"] = self._known_or_existing(analysis.fields.get("Contact"), row.get("Technical attribute 3"))
+        row["Technical attribute 4"] = self._known_or_existing(analysis.fields.get("Handle"), row.get("Technical attribute 4"))
+
     def _focus_catalogue(self, catalogue: pd.DataFrame) -> pd.DataFrame:
         focus_value = self.settings.focus_product_name.upper()
         if "Product Name" not in catalogue.columns:
@@ -175,10 +191,10 @@ class DemoRunner:
         return {
             "brief": [
                 "Review engineering-mapped drawings and the source catalogue.",
-                "Focus on Product Name column value B - ISOLATING COCKS.",
-                "Validate the expected 58-code demo scope against the loaded Excel file.",
+                f"Focus on Product Name column value {self.settings.focus_product_name}.",
+                f"Validate the expected {self.settings.focus_expected_count}-code demo scope against the loaded Excel file.",
                 "Extract characteristics from attached PDF drawings and map them into catalogue-compatible Excel rows.",
-                "Show cluster and cross-characteristic visuals for the focused product set.",
+                "Show requested 1st-level and 2nd-level diagrams for the focused product set.",
             ],
             "filter_column": "Product Name",
             "filter_value": self.settings.focus_product_name,
@@ -218,6 +234,11 @@ class DemoRunner:
         if extracted and extracted not in {"UNKNOWN", "NOT_FOUND"}:
             return extracted
         return existing or extracted or "UNKNOWN"
+
+    def _existing_or_known(self, existing: str | None, extracted: str | None) -> str:
+        if existing and existing not in {"UNKNOWN", "NOT_FOUND"}:
+            return existing
+        return self._known_or_existing(extracted, existing)
 
     def _build_evidence_frame(self, analyses: list[Any]) -> pd.DataFrame:
         rows: list[dict[str, Any]] = []

@@ -25,9 +25,9 @@ class PDFAnalyzer:
         warnings = []
         if not part_numbers:
             warnings.append("No PartNumber pattern detected.")
-        if fields.get("Drain") == "NEEDS REVIEW":
+        if fields.get("Product Name") == "B - ISOLATING COCKS" and fields.get("Drain") == "NEEDS REVIEW":
             warnings.append("Drain was not explicitly identified from text.")
-        if fields.get("Handle") == "NEEDS REVIEW":
+        if fields.get("Product Name") == "B - ISOLATING COCKS" and fields.get("Handle") == "NEEDS REVIEW":
             warnings.append("Handle was mentioned but type/colour is variant-specific or unclear.")
         return PDFDocumentAnalysis(
             source_pdf=path,
@@ -69,7 +69,7 @@ class PDFAnalyzer:
         return list(unique.values())
 
     def _part_number(self, text: str) -> str:
-        for pattern in (r"FT\d{7}-\d{3}", r"\b\d{3}\s?\d{3}\s?\d{2}\s?\d{2}\b"):
+        for pattern in (r"FT\d{7}-\d{3}", r"\b\d/\d{6}\b", r"\b\d{3}\s?\d{3}\s?\d{2}\s?\d{2}\b"):
             match = re.search(pattern, text, re.I)
             if match:
                 return normalize_part_number(match.group(0))
@@ -83,7 +83,7 @@ class PDFAnalyzer:
 
     def _near_description(self, window: list[str]) -> str:
         for token in window:
-            if re.search(r"cock|body|seal|screw|washer|switch|handle|joint|robinet|vis|rondelle|obturateur", token, re.I):
+            if re.search(r"cock|body|seal|screw|washer|switch|handle|joint|robinet|vis|rondelle|obturateur|gauge|manometer|compressor|tube|motor", token, re.I):
                 return token
         return ""
 
@@ -98,4 +98,3 @@ class PDFAnalyzer:
             if token in {"AA", "AC", "BB", "BC", "CC"}:
                 return token
         return ""
-

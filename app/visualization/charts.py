@@ -9,10 +9,12 @@ import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 import pandas as pd
 import plotly.express as px
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
+from PIL import Image
 from scipy.cluster.hierarchy import dendrogram, linkage
 from scipy.spatial.distance import pdist
 from sklearn.metrics.pairwise import cosine_similarity
@@ -53,30 +55,92 @@ class ChartBuilder:
             paths["cluster_scatter"] = html
         return paths
 
-    def build_demo_focus(self, catalogue: pd.DataFrame, clusters: dict[str, Any], output_dir: Path, expected_count: int) -> dict[str, Path]:
+    def build_demo_focus(self, catalogue: pd.DataFrame, clusters: dict[str, Any], output_dir: Path, expected_count: int, focus_name: str = "Focused category") -> dict[str, Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
         paths: dict[str, Path] = {}
+        technical = [c for c in catalogue.columns if c.startswith("Technical attribute")]
+        attr1 = technical[0] if len(technical) > 0 else "Technical attribute 1"
+        attr2 = technical[1] if len(technical) > 1 else "Technical attribute 2"
+        attr3 = technical[2] if len(technical) > 2 else "Technical attribute 3"
+        attr4 = technical[3] if len(technical) > 3 else "Technical attribute 4"
         paths["focus_diameter_handle"] = self._focus_stacked(
             catalogue,
-            "Technical attribute 1",
-            "Technical attribute 4",
-            output_dir / "isolating_cocks_diameter_handle.png",
-            "Isolating cocks: diameter vs handle",
+            attr1,
+            attr4,
+            output_dir / "focus_attribute_1_vs_4.png",
+            f"{focus_name}: {attr1} vs {attr4}",
         )
         paths["focus_drain_contact"] = self._stacked(
             catalogue,
-            "Technical attribute 2",
-            "Technical attribute 3",
-            output_dir / "isolating_cocks_drain_contact.png",
+            attr2,
+            attr3,
+            output_dir / "focus_attribute_2_vs_3.png",
         )
-        paths["focus_product_type"] = self._bar(catalogue, "Product Type", output_dir / "isolating_cocks_product_type.png")
-        paths["focus_coverage"] = self._focus_coverage(catalogue, output_dir / "isolating_cocks_demo_coverage.png", expected_count)
-        paths["focus_characteristic_flow"] = self._focus_characteristic_flow(catalogue, output_dir / "isolating_cocks_characteristic_flow.html")
+        paths["focus_product_type"] = self._bar(catalogue, "Product Type", output_dir / "focus_product_type.png")
+        paths["focus_coverage"] = self._focus_coverage(catalogue, output_dir / "focus_demo_coverage.png", expected_count, focus_name)
+        paths["focus_characteristic_flow"] = self._focus_characteristic_flow(catalogue, output_dir / "focus_characteristic_flow.html", focus_name)
         paths["visual_quantity_bubbles"] = self._visual_quantity_bubbles(catalogue, output_dir / "visual_quantity_bubbles.png")
         paths["visual_distribution_panel"] = self._visual_distribution_panel(catalogue, output_dir / "visual_distribution_panel.png")
         paths["visual_cluster_story"] = self._visual_cluster_story(catalogue, clusters, output_dir / "visual_cluster_story.png")
         paths.update(self._advanced_cluster_charts(catalogue, clusters, output_dir))
         return paths
+
+    def build_visual_packs(self, output_files: dict[str, Path], output_dir: Path, focus_name: str) -> dict[str, Path]:
+        level_1 = [
+            ("1. Visual quantity bubbles", "visual_quantity_bubbles", "High-level quantity view of dominant product characteristics."),
+            ("2. Distribution panel", "visual_distribution_panel", "Compact count distributions for the focused catalogue category."),
+            ("9. Affinity heatmap", "affinity_heatmap", "Pairwise technical similarity; darker cells mean closer products."),
+            ("10. Sankey / characteristic flow", "cluster_sankey", "How product attributes converge into clusters."),
+            ("11. Cluster radar", "cluster_radar", "Cluster comparison across completeness, variety, and concentration."),
+            ("12. Characteristic flow preview", "focus_characteristic_flow", "Most common configuration paths in the focused category."),
+        ]
+        level_2 = [
+            ("2. Distribution panel", "visual_distribution_panel", "Compact distribution view reused as a bridge from Level 1 to Level 2."),
+            ("3. Visual cluster story", "visual_cluster_story", "Presentation view explaining what each cluster means."),
+            ("8. Hierarchical dendrogram", "cluster_dendrogram", "Tree view of product affinity; closer branches mean stronger similarity."),
+        ]
+        paths = {
+            "level_1_visual_pack": output_dir / "ProductAnalyzer_Level_1_Visuals.pdf",
+            "level_2_visual_pack": output_dir / "ProductAnalyzer_Level_2_Visuals.pdf",
+        }
+        self._visual_pack_pdf(paths["level_1_visual_pack"], focus_name, "1° livello", level_1, output_files)
+        self._visual_pack_pdf(paths["level_2_visual_pack"], focus_name, "2° livello", level_2, output_files)
+        return paths
+
+    def _visual_pack_pdf(self, pdf_path: Path, focus_name: str, level_name: str, items: list[tuple[str, str, str]], output_files: dict[str, Path]) -> Path:
+        pages: list[tuple[str, Path, str]] = []
+        for title, key, caption in items:
+            path = output_files.get(key)
+            if not path:
+                continue
+            path_obj = Path(path)
+            if path_obj.suffix.lower() == ".html":
+                path_obj = path_obj.with_suffix(".png")
+            if path_obj.exists():
+                pages.append((title, path_obj, caption))
+        with PdfPages(pdf_path) as pdf:
+            fig = plt.figure(figsize=(11.69, 8.27))
+            fig.patch.set_facecolor("white")
+            fig.text(0.06, 0.78, f"Product Analyzer - {level_name}", fontsize=28, fontweight="bold", color="#162033")
+            fig.text(0.06, 0.69, focus_name, fontsize=18, color="#2458d3")
+            intro = f"Generated visual pack for {focus_name}. The chart numbering follows the client request for {level_name} diagrams."
+            fig.text(0.06, 0.6, textwrap.fill(intro, 92), fontsize=13, color="#637083", linespacing=1.35)
+            fig.text(0.06, 0.16, f"Charts included: {', '.join(title.split('.')[0] for title, _, _ in items)}", fontsize=10, color="#637083")
+            plt.axis("off")
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+            for title, image_path, caption in pages:
+                img = Image.open(image_path).convert("RGB")
+                fig = plt.figure(figsize=(11.69, 8.27))
+                fig.patch.set_facecolor("white")
+                fig.text(0.055, 0.955, title, fontsize=18, fontweight="bold", color="#162033")
+                fig.text(0.055, 0.913, textwrap.fill(caption, 118), fontsize=10.5, color="#637083")
+                ax = fig.add_axes([0.055, 0.07, 0.89, 0.79])
+                ax.imshow(img)
+                ax.axis("off")
+                pdf.savefig(fig, bbox_inches="tight")
+                plt.close(fig)
+        return pdf_path
 
     def _advanced_cluster_charts(self, df: pd.DataFrame, clusters: dict[str, Any], output_dir: Path) -> dict[str, Path]:
         working, matrix, features = self._cluster_matrix(df, clusters)
@@ -525,7 +589,7 @@ class ChartBuilder:
         counts = df[column].replace("", "UNKNOWN").value_counts(normalize=True)
         return float(counts.iloc[0]) if not counts.empty else 0.0
 
-    def _focus_coverage(self, df: pd.DataFrame, path: Path, expected_count: int) -> Path:
+    def _focus_coverage(self, df: pd.DataFrame, path: Path, expected_count: int, focus_name: str) -> Path:
         found = len(df)
         gap = max(0, expected_count - found)
         labels = ["Found in catalogue", "Missing vs demo target"]
@@ -533,7 +597,7 @@ class ChartBuilder:
         colors = ["#2458d3", "#f2a541"]
         plt.figure(figsize=(8.8, 4.8))
         bars = plt.bar(labels, values, color=colors)
-        plt.title("Demo scope check: isolating cock codes", fontsize=14, weight="bold", pad=14)
+        plt.title(f"Demo scope check: {focus_name}", fontsize=14, weight="bold", pad=14)
         plt.ylabel("Codes")
         plt.ylim(0, max(expected_count, found, 1) * 1.18)
         plt.grid(axis="y", alpha=0.22)
@@ -565,7 +629,7 @@ class ChartBuilder:
         plt.close()
         return path
 
-    def _focus_characteristic_flow(self, df: pd.DataFrame, path: Path) -> Path:
+    def _focus_characteristic_flow(self, df: pd.DataFrame, path: Path, focus_name: str) -> Path:
         dims = [c for c in ["Product Type", "Technical attribute 1", "Technical attribute 2", "Technical attribute 3", "Technical attribute 4"] if c in df.columns]
         if df.empty or len(dims) < 2:
             path.write_text("<html><body>No focused characteristic flow data</body></html>", encoding="utf-8")
@@ -574,7 +638,7 @@ class ChartBuilder:
         fig = px.parallel_categories(
             working,
             dimensions=dims,
-            title="Isolating cocks: characteristic flow",
+            title=f"{focus_name}: characteristic flow",
             color_continuous_scale=px.colors.sequential.Blues,
         )
         fig.update_layout(margin=dict(t=56, l=10, r=10, b=10), font=dict(size=12))

@@ -317,12 +317,12 @@ class ProductAnalyzerWindow(QMainWindow):
         ]
         self._add_metric_grid("Dashboard", metrics, columns=3)
 
-        self._add_section("Dashboard", "Demo brief", "This app run is configured around the exact isolating-cock demo scope from the engineering meeting.")
+        self._add_section("Dashboard", "Demo brief", "This app run is configured around the focused product category from the engineering meeting.")
         self._add_table("Dashboard", [{"Step": index + 1, "Implemented demo requirement": item} for index, item in enumerate(focus.get("brief", []))], max_height=240)
 
         chart_row = QSplitter(Qt.Horizontal)
         chart_row.addWidget(self._chart_card("Demo scope check", r.output_files.get("focus_coverage")))
-        chart_row.addWidget(self._chart_card("Isolating cock product type", r.output_files.get("focus_product_type")))
+        chart_row.addWidget(self._chart_card("Focused product type", r.output_files.get("focus_product_type")))
         chart_row.setSizes([1, 1])
         self.page_bodies["Dashboard"].addWidget(chart_row)
 
@@ -422,13 +422,13 @@ class ProductAnalyzerWindow(QMainWindow):
         self._add_metric_grid(
             "Product Explorer",
             [
-                ("Focused products", len(rows), "Isolating cock catalogue rows"),
+                ("Focused products", len(rows), "Focused catalogue rows"),
                 ("Expected codes", self.result.demo_focus.get("expected_codes", 0), "Meeting brief target"),
                 ("Review fields", int((self.generated == "NEEDS REVIEW").sum().sum()), "Editable validation targets"),
             ],
             columns=3,
         )
-        self._add_section("Product Explorer", "Isolating cock catalogue rows", "Focused view of the source Excel rows used for this demo, including master PN and technical characteristics.")
+        self._add_section("Product Explorer", "Focused catalogue rows", "Focused view of the source Excel rows used for this demo, including master PN and technical characteristics.")
         self._add_table("Product Explorer", rows)
         self._add_section("Product Explorer", "AI-mapped drawing examples", "Rows generated from the attached PDF drawings into the original Excel structure.")
         generated_rows = self.generated[[c for c in fields if c in self.generated.columns]].to_dict("records")
@@ -498,7 +498,7 @@ class ProductAnalyzerWindow(QMainWindow):
         self._add_metric_grid(
             "Clusters",
             [
-                ("Cluster count", len(explanations), "K-Means on isolating cocks"),
+                ("Cluster count", len(explanations), "K-Means on focused category"),
                 ("Products clustered", len(self.result.clusters.get("points", [])), "Focused catalogue records with PartNumber"),
                 ("Features", len(self.result.clusters.get("features", [])), "Encoded categorical characteristics"),
             ],
@@ -537,7 +537,7 @@ class ProductAnalyzerWindow(QMainWindow):
         product_type_counts = self.result.demo_focus.get("attribute_counts", {}).get("Product Type", {})
         rows = [{"Product Type": k, "Count": v} for k, v in product_type_counts.items()]
         splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self._chart_card("Isolating cock product type", self.result.output_files.get("focus_product_type")))
+        splitter.addWidget(self._chart_card("Focused product type", self.result.output_files.get("focus_product_type")))
         panel = self._panel()
         layout = QVBoxLayout(panel)
         layout.addWidget(self._label("Product type distribution", "PanelTitle"))
@@ -922,14 +922,14 @@ class ProductAnalyzerWindow(QMainWindow):
 
     def _page_description(self, name: str) -> str:
         descriptions = {
-            "Dashboard": "Demo overview for the isolating-cock scope, PDF extraction, matching, review queue, and focused analytics.",
+            "Dashboard": "Demo overview for the focused scope, PDF extraction, matching, review queue, and focused analytics.",
             "Visual Summary": "Client-facing visual layer with bubbles, distributions, and cluster story generated from the focused catalogue data.",
             "PDF Import": "Drawing-level ingestion status, detected identifiers, variants, warnings, and component extraction counts.",
             "Extraction Review": "Evidence-backed characteristic decisions. Low-confidence values stay visible for engineer validation.",
             "Generated Catalogue": "Catalogue-compatible output using the source Excel columns and terminology.",
-            "Product Explorer": "Focused isolating-cock rows from the source catalogue plus PDF-mapped demo rows.",
-            "Clusters": "Interactive isolating-cock product clusters with PCA projection, explanations, and representative PartNumbers.",
-            "Family Explorer": "Focused product-type distribution and characteristic flow for isolating cocks.",
+            "Product Explorer": "Focused product rows from the source catalogue plus PDF-mapped demo rows.",
+            "Clusters": "Interactive focused-category product clusters with PCA projection, explanations, and representative PartNumbers.",
+            "Family Explorer": "Focused product-type distribution and characteristic flow.",
             "Characteristic Analysis": "Cross-characteristic relationships for diameter, drain, contact, handle, and product type.",
             "Part Number Rules": "Discovered PartNumber influence signals, support counts, and configuration matrix results.",
             "Anomalies": "Duplicate, conflict, missing-configuration, low-confidence, and mapping-risk findings.",
@@ -945,7 +945,7 @@ class ProductAnalyzerWindow(QMainWindow):
             "Dashboard": (
                 "Shows the whole demo status in one place.\n\n"
                 "It confirms the focus category, target code count, rows found in Excel, missing gap, PDFs analyzed, generated rows, clusters, review fields, and anomalies.\n\n"
-                "Use this page to explain the demo story quickly: source Excel loaded, isolating cocks filtered, drawings mapped, charts generated."
+                "Use this page to explain the demo story quickly: source Excel loaded, focused category filtered, drawings mapped, charts generated."
             ),
             "Visual Summary": (
                 "Shows the manager-friendly visual layer requested by the client.\n\n"
@@ -968,17 +968,17 @@ class ProductAnalyzerWindow(QMainWindow):
                 "The charts summarize completeness and maturity for the focused catalogue data."
             ),
             "Product Explorer": (
-                "Shows the focused isolating-cock product rows from the source Excel.\n\n"
+                "Shows the focused product rows from the source Excel.\n\n"
                 "It lists PartNumber, Master PN, product hierarchy, product type, diameter, drain, contact, and handle attributes.\n\n"
                 "The lower table shows the PDF-mapped rows generated by the app for comparison."
             ),
             "Clusters": (
-                "Shows product clusters for isolating cocks only.\n\n"
+                "Shows product clusters for the focused category only.\n\n"
                 "The scatter plot projects catalogue rows into two dimensions using encoded product attributes, then groups similar configurations.\n\n"
                 "The summary explains each cluster using its most common attributes and representative PartNumbers."
             ),
             "Family Explorer": (
-                "Shows how the focused isolating-cock rows are distributed by product type.\n\n"
+                "Shows how the focused rows are distributed by product type.\n\n"
                 "The bar chart and count list show which product types dominate the category.\n\n"
                 "The flow chart connects product type, diameter, drain, contact, and handle to show common configuration paths."
             ),
