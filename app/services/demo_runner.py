@@ -43,9 +43,7 @@ class DemoRunner:
         advance("Prepared output folders")
 
         catalogue, profile = CatalogueLoader().load(self.settings.catalogue_path)
-        focus_catalogue = self._focus_catalogue(catalogue)
-        demo_focus = self._build_demo_focus(catalogue, focus_catalogue)
-        advance(f"Loaded catalogue and isolated {self.settings.focus_product_name} category")
+        advance("Loaded sample catalogue as schema/reference template")
         pdf_analyzer = PDFAnalyzer()
         analyses = []
         for path in pdf_paths:
@@ -57,14 +55,16 @@ class DemoRunner:
         matches = CatalogueMatcher().match(catalogue, analyses)
         advance("Matched PDFs to catalogue")
         generated = self._build_generated_catalogue(catalogue, analyses, matches)
-        advance("Generated catalogue-compatible rows")
-        rule_results = RuleDiscoveryEngine().discover(focus_catalogue)
-        advance("Discovered focused category PartNumber rules")
-        clusters = ClusteringEngine().run(focus_catalogue, method="kmeans", n_clusters=5)
-        advance("Computed focused category clusters and PCA projection")
-        similarity = SimilarityEngine().find_similar(focus_catalogue)
+        analysis_catalogue = generated.copy()
+        demo_focus = self._build_demo_focus(catalogue, analysis_catalogue, expected_count=len(pdf_paths))
+        advance("Generated catalogue rows from PDF drawings")
+        rule_results = RuleDiscoveryEngine().discover(analysis_catalogue)
+        advance("Discovered PDF catalogue PartNumber rules")
+        clusters = ClusteringEngine().run(analysis_catalogue, method="kmeans", n_clusters=5)
+        advance("Computed PDF catalogue clusters and PCA projection")
+        similarity = SimilarityEngine().find_similar(analysis_catalogue)
         advance("Computed technical similarity")
-        anomalies = AnomalyDetector().detect(focus_catalogue, analyses, rule_results)
+        anomalies = AnomalyDetector().detect(analysis_catalogue, analyses, rule_results)
         advance("Detected anomalies")
         bom_summary = BOMAnalyzer().summarize(analyses)
         advance("Summarized BOM/component reuse")
@@ -80,8 +80,8 @@ class DemoRunner:
         output_files["focus_catalogue_xlsx"] = output_dir / "focus_catalogue.xlsx"
         generated.to_csv(output_files["catalogue_csv"], index=False)
         generated.to_excel(output_files["catalogue_xlsx"], index=False)
-        focus_catalogue.to_csv(output_files["focus_catalogue_csv"], index=False)
-        focus_catalogue.to_excel(output_files["focus_catalogue_xlsx"], index=False)
+        analysis_catalogue.to_csv(output_files["focus_catalogue_csv"], index=False)
+        analysis_catalogue.to_excel(output_files["focus_catalogue_xlsx"], index=False)
         evidence.to_csv(output_files["evidence_csv"], index=False)
         pd.DataFrame(anomalies).to_csv(output_files["anomalies_csv"], index=False)
         pd.DataFrame([row for a in analyses for row in a.bom_rows]).to_csv(output_files["bom_csv"], index=False)
@@ -89,11 +89,12 @@ class DemoRunner:
         advance("Exported CSV, XLSX, and JSON outputs")
         bom_rows = [row for a in analyses for row in a.bom_rows]
         chart_builder = ChartBuilder()
-        chart_paths = chart_builder.build_all(focus_catalogue, clusters, output_dir, anomalies=anomalies, evidence=evidence, bom_rows=bom_rows, rule_results=rule_results)
-        chart_paths.update(chart_builder.build_demo_focus(focus_catalogue, clusters, output_dir, self.settings.focus_expected_count, self.settings.focus_product_name))
+        visual_title = demo_focus["filter_value"]
+        chart_paths = chart_builder.build_all(analysis_catalogue, clusters, output_dir, anomalies=anomalies, evidence=evidence, bom_rows=bom_rows, rule_results=rule_results)
+        chart_paths.update(chart_builder.build_demo_focus(analysis_catalogue, clusters, output_dir, len(analysis_catalogue), visual_title))
         output_files.update(chart_paths)
-        output_files.update(chart_builder.build_visual_packs(output_files, output_dir, self.settings.focus_product_name))
-        advance("Generated focused category visual analytics")
+        output_files.update(chart_builder.build_visual_packs(output_files, output_dir, visual_title))
+        advance("Generated PDF catalogue visual analytics")
 
         result = DemoRunResult(
             catalogue_profile=profile,
@@ -108,7 +109,7 @@ class DemoRunner:
             similarity=similarity,
             output_files=output_files,
         )
-        output_files["report"] = ReportBuilder().build(result, focus_catalogue, output_dir / "DEMO_ANALYSIS_REPORT.md", bom_summary)
+        output_files["report"] = ReportBuilder().build(result, analysis_catalogue, output_dir / "DEMO_ANALYSIS_REPORT.md", bom_summary)
         advance("Built analysis report")
         self._progress(100, "Analysis complete")
         return result, generated, evidence
@@ -140,23 +141,7 @@ class DemoRunner:
             row["Preferred"] = "NEEDS REVIEW"
             row["Q.,ty in 2026"] = ""
             rows.append(row)
-        extension_rows = []
-        for analysis in analyses:
-            base = {column: "" for column in catalogue.columns}
-            base.update(
-                {
-                    "OPS Product Category": "EXTRACTION METADATA",
-                    "Product Family": analysis.source_pdf.name,
-                    "Product Name": analysis.fields.get("Drawing title", ""),
-                    "Product Type": "PDF DOCUMENT",
-                    "PartNumber": analysis.fields.get("Drawing number", ""),
-                    "Master PN": analysis.fields.get("Drawing number", ""),
-                    "Maturity": "TRACEABILITY",
-                    "Preferred": "N/A",
-                }
-            )
-            extension_rows.append(base)
-        return pd.DataFrame(rows + extension_rows, columns=catalogue.columns)
+        return pd.DataFrame(rows, columns=catalogue.columns)
 
     def _map_technical_attributes(self, row: dict[str, Any], analysis: Any) -> None:
         product_name = analysis.fields.get("Product Name", "")
@@ -178,7 +163,7 @@ class DemoRunner:
         mask = catalogue["Product Name"].astype(str).str.upper().eq(focus_value)
         return catalogue.loc[mask].copy()
 
-    def _build_demo_focus(self, catalogue: pd.DataFrame, focus_catalogue: pd.DataFrame) -> dict[str, Any]:
+    def _build_demo_focus(self, catalogue: pd.DataFrame, focus_catalogue: pd.DataFrame, expected_count: int | None = None) -> dict[str, Any]:
         technical = [c for c in catalogue.columns if c.startswith("Technical attribute")]
         preview_columns = [c for c in ["PartNumber", "Master PN", "Product Family", "Product Name", "Product Type", *technical] if c in focus_catalogue.columns]
         attribute_counts: dict[str, dict[str, int]] = {}
@@ -187,17 +172,16 @@ class DemoRunner:
                 counts = focus_catalogue[column].replace("", "UNKNOWN").value_counts().head(12)
                 attribute_counts[column] = {str(k): int(v) for k, v in counts.items()}
         found = int(len(focus_catalogue))
-        expected = int(self.settings.focus_expected_count)
+        expected = int(expected_count if expected_count is not None else found)
         return {
             "brief": [
-                "Review engineering-mapped drawings and the source catalogue.",
-                f"Focus on Product Name column value {self.settings.focus_product_name}.",
-                f"Validate the expected {self.settings.focus_expected_count}-code demo scope against the loaded Excel file.",
-                "Extract characteristics from attached PDF drawings and map them into catalogue-compatible Excel rows.",
-                "Show requested 1st-level and 2nd-level diagrams for the focused product set.",
+                "Use the initial Excel catalogue as a schema/reference template only.",
+                "Read the supplied PDF drawings and produce a new catalogue from those PDFs.",
+                "Map extracted drawing characteristics into the catalogue-compatible Excel columns.",
+                "Run requested 1st-level and 2nd-level diagrams on the PDF-generated catalogue.",
             ],
-            "filter_column": "Product Name",
-            "filter_value": self.settings.focus_product_name,
+            "filter_column": "Source",
+            "filter_value": "PDF-generated catalogue",
             "expected_codes": expected,
             "found_codes": found,
             "missing_vs_expected": max(0, expected - found),
