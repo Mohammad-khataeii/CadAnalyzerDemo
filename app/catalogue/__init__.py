@@ -1,0 +1,2 @@
+"""Catalogue loading and mapping."""
+

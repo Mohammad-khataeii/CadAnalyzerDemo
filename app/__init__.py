@@ -1,0 +1,2 @@
+"""Product Analyzer demo application."""
+

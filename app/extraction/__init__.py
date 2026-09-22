@@ -1,0 +1,2 @@
+"""Characteristic extraction."""
+

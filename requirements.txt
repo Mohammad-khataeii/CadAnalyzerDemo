@@ -1,0 +1,11 @@
+pandas
+openpyxl
+pymupdf
+scikit-learn
+matplotlib
+plotly
+networkx
+PySide6
+pytest
+pyinstaller
+
