@@ -27,7 +27,7 @@ class CharacteristicExtractor:
         if drawing:
             evidence.append(self._ev("Drawing number", drawing, pdf_path, self._page_of(page_text, drawing), drawing, 0.96, "native_pdf_text"))
 
-        revision = self._first(r"\b([A-Z]{1,2}\d{2})\b", full_text)
+        revision = self._revision_from_filename(pdf_path) or self._drawing_revision(full_text)
         fields["Drawing revision"] = revision or NOT_FOUND
         if revision:
             evidence.append(self._ev("Drawing revision", revision, pdf_path, self._page_of(page_text, revision), revision, 0.86, "title_block_pattern"))
@@ -38,6 +38,8 @@ class CharacteristicExtractor:
             evidence.append(self._ev("Drawing title", clean_cell(product_line), pdf_path, self._page_of(page_text, product_line), product_line, 0.88, "native_pdf_text"))
 
         product_kind = self._product_kind(full_text)
+        fields["Configuration"] = self._extract_configuration(full_text, drawing or "")
+        fields["Status"] = "Released" if re.search(r"\bStatus\s+RELEASED\b|\bRELEASED\b", full_text, re.I) else UNKNOWN
 
         diameter = self._extract_diameter(full_text, product_kind)
         fields["Diameter"] = diameter
@@ -51,11 +53,11 @@ class CharacteristicExtractor:
 
         fields["Product Family"], fields["Product Name"], fields["Product Type"] = self._product_hierarchy(full_text, product_kind)
 
-        fields["Pressure"] = self._extract_pressure(full_text)
+        fields["Pressure"] = self._extract_pressure(full_text, product_kind)
         if fields["Pressure"] != UNKNOWN:
             evidence.append(self._ev("Pressure", fields["Pressure"], pdf_path, self._page_of(page_text, fields["Pressure"]), fields["Pressure"], 0.86, "note_pattern"))
 
-        temp = self._first(r"(?:Operating temperature|Temp[ée]rature de fonctionnement)[^\n:]*:?\s*([^\n]+)", full_text)
+        temp = self._extract_temperature(full_text)
         fields["Temperature"] = temp or UNKNOWN
         if temp:
             evidence.append(self._ev("Temperature", temp, pdf_path, self._page_of(page_text, temp), temp, 0.85, "note_pattern"))
@@ -88,11 +90,27 @@ class CharacteristicExtractor:
         slash_match = re.match(r"(\d)-(\d{6})", stem)
         return f"{slash_match.group(1)}/{slash_match.group(2)}" if slash_match else ""
 
+    def _revision_from_filename(self, pdf_path: Path) -> str:
+        stem = pdf_path.stem.upper()
+        match = re.search(r"_([A-Z]\d{2}|[A-Z]{2}\d{2}|L\d{2})(?:_|$)", stem)
+        return match.group(1) if match else ""
+
+    def _drawing_revision(self, text: str) -> str:
+        codes = [
+            code
+            for code in re.findall(r"\b([A-Z]{1,2}\d{2})\b", text)
+            if not re.match(r"^(IP|RAL|M|L)\d", code, re.I)
+        ]
+        if not codes:
+            return ""
+        ranking = sorted(set(codes), key=lambda code: (code[0], int(code[1:]) if code[1:].isdigit() else -1))
+        return ranking[-1]
+
     def _title_line(self, text: str) -> str:
         lines = [clean_cell(line) for line in text.splitlines() if clean_cell(line)]
         for pattern in (r"^Insulation cock\b", r"^FLANGEABLE COCK\b", r"pressure gauge", r"manometer", r"manometro", r"compressor"):
             for line in lines:
-                if re.search(pattern, line, re.I):
+                if re.search(pattern, line, re.I) and not re.search(r"is suitable to operate", line, re.I):
                     return line
         for i, line in enumerate(lines[:-1]):
             if line.upper() == "COCK":
@@ -124,6 +142,25 @@ class CharacteristicExtractor:
         return UNKNOWN, UNKNOWN, UNKNOWN
 
     def _compressor_type(self, text: str) -> str:
+        if re.search(r"\bTYPE\s*20\b", text, re.I):
+            return "H - BURAN 20 4P"
+        standard_block = self._standard_configuration_block(text)
+        if re.search(r"BURAN\s*20.*4P|20\s*4P", standard_block, re.I):
+            return "H - BURAN 20 4P"
+        if re.search(r"BURAN\s*20.*6P|20\s*6P", standard_block, re.I):
+            return "G - BURAN 20 6P"
+        if re.search(r"BURAN\s*10", standard_block, re.I):
+            return "F - BURAN 10 6P"
+        if re.search(r"BURAN\s*8.*PSC|8.*PSC", standard_block, re.I):
+            return "E - BURAN 8 - PSC"
+        if re.search(r"BURAN\s*8", standard_block, re.I):
+            return "D - BURAN 8"
+        if re.search(r"BURAN\s*5L", standard_block, re.I):
+            return "C - BURAN 5L"
+        if re.search(r"BURAN\s*5.*TOT|5.*TOT", standard_block, re.I):
+            return "B - BURAN 5 ToT"
+        if re.search(r"BURAN\s*5", standard_block, re.I):
+            return "A - BURAN 5"
         if re.search(r"BURAN\s*20.*4P|20\s*4P", text, re.I):
             return "H - BURAN 20 4P"
         if re.search(r"BURAN\s*20.*6P|20\s*6P", text, re.I):
@@ -142,6 +179,33 @@ class CharacteristicExtractor:
             return "A - BURAN 5"
         return UNKNOWN
 
+    def _standard_configuration_block(self, text: str) -> str:
+        lines = [clean_cell(line) for line in text.splitlines() if clean_cell(line)]
+        chunks: list[str] = []
+        for i, line in enumerate(lines):
+            if re.search(r"CONFIGURAZIONE STANDARD|STANDARD CONFIGURATION", line, re.I):
+                chunks.extend(lines[max(0, i - 12) : i + 18])
+        return "\n".join(chunks)
+
+    def _extract_configuration(self, text: str, drawing: str) -> str:
+        if not drawing:
+            return UNKNOWN
+        lines = [clean_cell(line) for line in text.splitlines() if clean_cell(line)]
+        for i, line in enumerate(lines):
+            if normalize_part_number(line) != drawing:
+                continue
+            local_after = "\n".join(lines[i : i + 4])
+            local_before = "\n".join(lines[max(0, i - 4) : i + 1])
+            if re.search(r"CONFIGURAZIONE\s+STANDARD|STANDARD\s+CONFIGURATION", f"{local_before}\n{local_after}", re.I):
+                return "STANDARD CONFIGURATION"
+            if re.search(r"ALTA\s+UMIDITA|HIGH\s+HUMIDITY", f"{local_before}\n{local_after}", re.I):
+                return "HIGH HUMIDITY CONFIGURATION"
+        if re.search(rf"{re.escape(drawing)}[\s\S]{{0,80}}(?:CONFIGURAZIONE\s+STANDARD|STANDARD\s+CONFIGURATION)", text, re.I):
+            return "STANDARD CONFIGURATION"
+        if re.search(rf"{re.escape(drawing)}[\s\S]{{0,80}}(?:ALTA\s+UMIDITA|HIGH\s+HUMIDITY)", text, re.I):
+            return "HIGH HUMIDITY CONFIGURATION"
+        return UNKNOWN
+
     def _extract_diameter(self, text: str, product_kind: str) -> str:
         if product_kind == "MANOMETER":
             match = re.search(r"(?:ø|Ø|DIAM(?:ETER)?\s*|PRESSURE\s+GAUGE\s+)(60|80|100)\b", text, re.I)
@@ -149,26 +213,79 @@ class CharacteristicExtractor:
         match = re.search(r"\b(DN\s?\d+)\b", text, re.I)
         return f"PNEU DIAMETER {match.group(1).replace(' ', '')}" if match else UNKNOWN
 
-    def _extract_pressure(self, text: str) -> str:
+    def _extract_pressure(self, text: str, product_kind: str) -> str:
+        if product_kind != "MANOMETER":
+            return UNKNOWN
         explicit = self._first(r"(?:Maximum pressure|Pression maximum)[^\n:]*:?\s*([^\n]+)", text)
         if explicit:
             return explicit
         gauge_range = self._first(r"(?:INDICATING RANGE\s*)?(\d+\s*(?:-|÷|/|to)\s*\d+\s*bar)", text)
         if gauge_range:
-            normalized = re.sub(r"\s+", "", gauge_range).replace("÷", "-").replace("TO", "-").replace("to", "-")
-            return f"PRESS RANGE {normalized}"
+            return f"PRESS RANGE {self._normalize_pressure_value(gauge_range)} bar"
+        scale_range = self._first(r"(?:SCALA|SCALE)\s*(\d+\s*(?:-|÷|/|to)\s*\d+)", text)
+        if scale_range:
+            return f"PRESS RANGE {self._normalize_pressure_value(scale_range)} bar"
+        table_range = self._pressure_from_code_table(text)
+        if table_range:
+            return f"PRESS RANGE 0-{table_range} bar"
         bourdon = self._first(r"(?:burdon|bourdon)[^\n]*?(\d+\s*bar)", text)
         if bourdon:
             bourdon_value = re.sub(r"\s+", "", bourdon)
             return f"PRESS RANGE 0-{bourdon_value}"
         return UNKNOWN
 
+    def _extract_temperature(self, text: str) -> str:
+        for pattern in (
+            r"(?:Operating temperature|Temp[ée]rature de fonctionnement)\s*:?\s*([^\n]+)",
+            r"-\s*OPERATING TEMPERATURE\s+([^\n]+)",
+            r"-\s*BETRIEBSTEMPERATUR\s+([^\n]+)",
+        ):
+            value = self._first(pattern, text)
+            if value and re.search(r"\d+\s*°\s*C", value, re.I):
+                return value
+        return UNKNOWN
+
+    def _normalize_pressure_value(self, value: str) -> str:
+        normalized = re.sub(r"\s+", "", value).replace("÷", "-").replace("TO", "-").replace("to", "-")
+        normalized = normalized.replace("bar", "")
+        return normalized
+
+    def _pressure_from_code_table(self, text: str) -> str:
+        lines = [clean_cell(line) for line in text.splitlines() if clean_cell(line)]
+        for i, line in enumerate(lines):
+            if re.fullmatch(r"FT\d{7}-\d{3}", line, re.I):
+                window = lines[i + 1 : i + 8]
+                numbers = [token for token in window if re.fullmatch(r"\d{1,3}", token)]
+                if len(numbers) >= 2:
+                    return numbers[1]
+        return ""
+
     def _extract_mounting(self, text: str) -> str:
+        installation = self._first(r"(?:Installation position|Installation|Installazione|Einbau)\s*:?\s*([^\n]+)", text)
+        if installation:
+            normalized = self._normalize_mounting_angle(installation)
+            if normalized:
+                return normalized
         mounting = self._first(r"(MOUNTING\s*[^\n]+)", text)
-        if mounting:
+        if mounting and not re.search(r"WATER SEPARATOR", mounting, re.I):
             return mounting.upper()
         angle = self._first(r"((?:\d{2}\s*°\s*(?:-|to|/)?\s*){1,2}(?:\([^\n]+\))?)", text)
         return f"MOUNTING {angle}".upper() if angle else UNKNOWN
+
+    def _normalize_mounting_angle(self, text: str) -> str:
+        angle = self._first(r"(\d{2}\s*°?\s*(?:-|÷|to)\s*\d{2}\s*°?)", text)
+        single = self._first(r"(\d{2}\s*°(?:\s*\+\d+°/-\d+°)?)", text)
+        adjustment = self._first(r"(?:adjustment|Einstellung)\s*(\d{2}\s*°)", text)
+        value = angle or single
+        if not value:
+            return ""
+        value = value.replace("÷", "-")
+        value = re.sub(r"\s+", " ", value).strip()
+        value = re.sub(r"(\d{2})(?!\s*°)", r"\1°", value)
+        value = value.replace("°-", "° - ").replace("- ", "- ")
+        if adjustment:
+            return f"MOUNTING {value} (Adjustment {adjustment.replace(' ', '')})"
+        return f"MOUNTING {value}"
 
     def _extract_variants(self, text: str) -> list[str]:
         raw = re.findall(r"\b(?:Var\.?|VAR|Variant(?:e)?s?)\s*(?:/ Variants)?\s*[:.]?\s*([A-Z0-9/ \-\u00e0toFT]+)", text, re.I)

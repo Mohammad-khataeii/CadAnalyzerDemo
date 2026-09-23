@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from copy import copy
 import json
 from pathlib import Path
 from typing import Any, Callable
 
 import pandas as pd
+from openpyxl import load_workbook
 
 from app.anomalies.detector import AnomalyDetector
 from app.bom.analyzer import BOMAnalyzer
@@ -120,12 +122,15 @@ class DemoRunner:
 
     def _build_generated_catalogue(self, catalogue: pd.DataFrame, analyses: list[Any], matches: list[Any]) -> pd.DataFrame:
         rows: list[dict[str, Any]] = []
+        catalogue_columns = list(catalogue.columns)
         match_by_pdf = {match.source_pdf: match for match in matches}
         for analysis in analyses:
             match = match_by_pdf.get(analysis.source_pdf.name)
             row = self._matched_catalogue_base(catalogue, match) if match else {column: "" for column in catalogue.columns}
             row["OPS Product Category"] = row.get("OPS Product Category") or "C - BRAKE CONTROL"
-            if match and match.matched_part_number:
+            has_catalogue_match = bool(match and match.matched_part_number)
+            is_variant_reference = self._is_variant_reference(analysis, match)
+            if has_catalogue_match and not is_variant_reference:
                 row["Product Family"] = self._existing_or_known(row.get("Product Family"), analysis.fields.get("Product Family"))
                 row["Product Name"] = self._existing_or_known(row.get("Product Name"), analysis.fields.get("Product Name"))
                 row["Product Type"] = self._existing_or_known(row.get("Product Type"), analysis.fields.get("Product Type"))
@@ -133,16 +138,31 @@ class DemoRunner:
                 row["Product Family"] = self._known_or_existing(analysis.fields.get("Product Family"), row.get("Product Family"))
                 row["Product Name"] = self._known_or_existing(analysis.fields.get("Product Name"), row.get("Product Name"))
                 row["Product Type"] = self._known_or_existing(analysis.fields.get("Product Type"), row.get("Product Type"))
-            self._map_technical_attributes(row, analysis)
-            row["Configurability sheet"] = "EXTRACTED FROM PDF - REVIEW REQUIRED"
-            row["PartNumber"] = match.matched_part_number if match and match.matched_part_number else self._primary_part(analysis.part_numbers, analysis.fields.get("Drawing number", "UNKNOWN"))
-            row["Master PN"] = match.matched_master_pn if match and match.matched_master_pn else self._master_part(analysis.part_numbers, analysis.fields.get("Drawing number", "UNKNOWN"))
-            row["Maturity"] = "EXTRACTED"
-            row["Preferred"] = "NEEDS REVIEW"
-            row["Q.,ty in 2026"] = ""
-            row.update(self._analysis_columns(analysis, match))
-            rows.append(row)
-        return pd.DataFrame(rows)
+            self._map_technical_attributes(row, analysis, prefer_existing=has_catalogue_match and not is_variant_reference)
+            configuration = analysis.fields.get("Configuration", "")
+            if not row.get("Configurability sheet") or is_variant_reference:
+                row["Configurability sheet"] = configuration if configuration and configuration != "UNKNOWN" else "PDF - REVIEW"
+            part_number, master_pn = self._catalogue_part_numbers(analysis, match, is_variant_reference)
+            row["PartNumber"] = part_number
+            row["Master PN"] = master_pn
+            row["Maturity"] = row.get("Maturity") or analysis.fields.get("Status") or "Extracted"
+            row["Preferred"] = row.get("Preferred") or "Needs review"
+            row["Q.,ty in 2026"] = row.get("Q.,ty in 2026", "")
+            rows.append({column: row.get(column, "") for column in catalogue_columns})
+        return pd.DataFrame(rows, columns=catalogue_columns)
+
+    def _is_variant_reference(self, analysis: Any, match: Any) -> bool:
+        drawing = str(analysis.fields.get("Drawing number", ""))
+        return bool(match and match.matched_part_number and drawing.startswith("FT") and match.matched_part_number != drawing)
+
+    def _catalogue_part_numbers(self, analysis: Any, match: Any, is_variant_reference: bool) -> tuple[str, str]:
+        drawing = str(analysis.fields.get("Drawing number", "UNKNOWN"))
+        if is_variant_reference and drawing.startswith("FT"):
+            return drawing, drawing
+        if match and match.matched_part_number:
+            return match.matched_part_number, match.matched_master_pn or match.matched_part_number
+        part_number = self._primary_part(analysis.part_numbers, drawing)
+        return part_number, self._master_part(analysis.part_numbers, drawing)
 
     def _analysis_columns(self, analysis: Any, match: Any) -> dict[str, Any]:
         evidence = analysis.evidence
@@ -163,6 +183,8 @@ class DemoRunner:
             "Extracted LED": analysis.fields.get("LED", ""),
             "Extracted pressure": analysis.fields.get("Pressure", ""),
             "Extracted mounting": analysis.fields.get("Mounting", ""),
+            "Extracted configuration": analysis.fields.get("Configuration", ""),
+            "Extracted status": analysis.fields.get("Status", ""),
             "Extracted drain": analysis.fields.get("Drain", ""),
             "Extracted contact": analysis.fields.get("Contact", ""),
             "Extracted handle": analysis.fields.get("Handle", ""),
@@ -197,27 +219,64 @@ class DemoRunner:
         )
         bom_rows = pd.DataFrame([row for analysis in analyses for row in analysis.bom_rows])
         match_rows = pd.DataFrame([match.__dict__ for match in matches])
+        match_by_pdf = {match.source_pdf: match for match in matches}
         anomaly_rows = pd.DataFrame(anomalies)
-        with pd.ExcelWriter(path, engine="openpyxl") as writer:
-            generated.to_excel(writer, sheet_name="PDF Catalogue", index=False)
+        review_rows = pd.DataFrame([self._analysis_columns(analysis, match_by_pdf.get(analysis.source_pdf.name)) for analysis in analyses])
+        self._write_template_catalogue_sheet(path, generated)
+        with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
             pdf_summary.to_excel(writer, sheet_name="PDF Summary", index=False)
+            review_rows.to_excel(writer, sheet_name="PDF Row Review", index=False)
             evidence.to_excel(writer, sheet_name="Extraction Evidence", index=False)
             (bom_rows if not bom_rows.empty else pd.DataFrame(columns=["SourcePDF", "ComponentPartNumber", "Quantity", "Description", "Specification", "ABC class", "EvidenceText"])).to_excel(writer, sheet_name="BOM Components", index=False)
             (match_rows if not match_rows.empty else pd.DataFrame(columns=["source_pdf", "status", "matched_part_number", "matched_master_pn", "reason", "candidate_count"])).to_excel(writer, sheet_name="Matches", index=False)
             (anomaly_rows if not anomaly_rows.empty else pd.DataFrame(columns=["Type", "Severity", "Evidence"])).to_excel(writer, sheet_name="Anomalies", index=False)
 
-    def _map_technical_attributes(self, row: dict[str, Any], analysis: Any) -> None:
+    def _write_template_catalogue_sheet(self, path: Path, generated: pd.DataFrame) -> None:
+        wb = load_workbook(self.settings.catalogue_path)
+        ws = wb[wb.sheetnames[0]]
+        header_row = 4
+        first_data_row = 5
+        first_catalogue_col = 2
+        headers = [ws.cell(header_row, column).value for column in range(first_catalogue_col, ws.max_column + 1)]
+        style_source_row = first_data_row if ws.max_row >= first_data_row else header_row
+        style_by_column = {
+            column: {
+                "style": copy(ws.cell(style_source_row, column)._style),
+                "number_format": ws.cell(style_source_row, column).number_format,
+                "alignment": copy(ws.cell(style_source_row, column).alignment),
+                "protection": copy(ws.cell(style_source_row, column).protection),
+            }
+            for column in range(first_catalogue_col, ws.max_column + 1)
+        }
+        if ws.max_row >= first_data_row:
+            ws.delete_rows(first_data_row, ws.max_row - first_data_row + 1)
+        for row_offset, record in enumerate(generated.to_dict("records"), start=first_data_row):
+            for column_offset, header in enumerate(headers, start=first_catalogue_col):
+                cell = ws.cell(row_offset, column_offset)
+                cell.value = record.get(header, "")
+                source = style_by_column[column_offset]
+                cell._style = copy(source["style"])
+                cell.number_format = source["number_format"]
+                cell.alignment = copy(source["alignment"])
+                cell.protection = copy(source["protection"])
+        ws.freeze_panes = "B5"
+        wb.save(path)
+
+    def _map_technical_attributes(self, row: dict[str, Any], analysis: Any, prefer_existing: bool = False) -> None:
+        choose = self._existing_or_known if prefer_existing else self._known_or_existing
         product_name = analysis.fields.get("Product Name", "")
         if product_name == "D - MANOMETERS":
-            row["Technical attribute 1"] = self._known_or_existing(analysis.fields.get("Diameter"), row.get("Technical attribute 1"))
-            row["Technical attribute 2"] = self._known_or_existing(analysis.fields.get("LED"), row.get("Technical attribute 2"))
-            row["Technical attribute 3"] = self._known_or_existing(analysis.fields.get("Pressure"), row.get("Technical attribute 3"))
-            row["Technical attribute 4"] = self._known_or_existing(analysis.fields.get("Mounting"), row.get("Technical attribute 4"))
+            row["Technical attribute 1"] = choose(row.get("Technical attribute 1"), analysis.fields.get("Diameter")) if prefer_existing else choose(analysis.fields.get("Diameter"), row.get("Technical attribute 1"))
+            row["Technical attribute 2"] = choose(row.get("Technical attribute 2"), analysis.fields.get("LED")) if prefer_existing else choose(analysis.fields.get("LED"), row.get("Technical attribute 2"))
+            row["Technical attribute 3"] = choose(row.get("Technical attribute 3"), analysis.fields.get("Pressure")) if prefer_existing else choose(analysis.fields.get("Pressure"), row.get("Technical attribute 3"))
+            row["Technical attribute 4"] = choose(row.get("Technical attribute 4"), analysis.fields.get("Mounting")) if prefer_existing else choose(analysis.fields.get("Mounting"), row.get("Technical attribute 4"))
             return
-        row["Technical attribute 1"] = self._known_or_existing(analysis.fields.get("Diameter"), row.get("Technical attribute 1"))
-        row["Technical attribute 2"] = self._known_or_existing(analysis.fields.get("Drain"), row.get("Technical attribute 2"))
-        row["Technical attribute 3"] = self._known_or_existing(analysis.fields.get("Contact"), row.get("Technical attribute 3"))
-        row["Technical attribute 4"] = self._known_or_existing(analysis.fields.get("Handle"), row.get("Technical attribute 4"))
+        if product_name == "A-BURAN COMPRESSOR":
+            return
+        row["Technical attribute 1"] = choose(row.get("Technical attribute 1"), analysis.fields.get("Diameter")) if prefer_existing else choose(analysis.fields.get("Diameter"), row.get("Technical attribute 1"))
+        row["Technical attribute 2"] = choose(row.get("Technical attribute 2"), analysis.fields.get("Drain")) if prefer_existing else choose(analysis.fields.get("Drain"), row.get("Technical attribute 2"))
+        row["Technical attribute 3"] = choose(row.get("Technical attribute 3"), analysis.fields.get("Contact")) if prefer_existing else choose(analysis.fields.get("Contact"), row.get("Technical attribute 3"))
+        row["Technical attribute 4"] = choose(row.get("Technical attribute 4"), analysis.fields.get("Handle")) if prefer_existing else choose(analysis.fields.get("Handle"), row.get("Technical attribute 4"))
 
     def _focus_catalogue(self, catalogue: pd.DataFrame) -> pd.DataFrame:
         focus_value = self.settings.focus_product_name.upper()

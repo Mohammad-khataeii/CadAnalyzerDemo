@@ -58,3 +58,21 @@ def test_demo_exports(tmp_path):
     assert progress[0][0] == 0
     assert progress[-1][0] == 100
     assert [p for p, _ in progress] == sorted(p for p, _ in progress)
+
+
+def test_generated_catalogue_keeps_template_structure_and_pdf_codes(tmp_path):
+    settings = DemoSettings(output_dir=tmp_path)
+    template, _ = CatalogueLoader().load(settings.catalogue_path)
+    _, generated, _ = DemoRunner(settings).run()
+    assert list(generated.columns) == list(template.columns)
+
+    generated_parts = set(generated["PartNumber"])
+    for expected_part in {
+        "FT0024835-100",
+        "FT0129531-100",
+        "FT0105784-100",
+        "FT0027389-100",
+        "FT0127469-100",
+        "FT0127470-100",
+    }:
+        assert expected_part in generated_parts

@@ -19,7 +19,11 @@ class CatalogueMatcher:
             master = [pn for pn in analysis.part_numbers if pn in set(normalized["Master PN"])]
             if direct:
                 row = normalized[normalized["PartNumber"] == direct[0]].iloc[0]
-                results.append(MatchResult(analysis.source_pdf.name, "MATCH", direct[0], row.get("Master PN", ""), "PartNumber appears in catalogue.", 1))
+                drawing = normalize_part_number(analysis.fields.get("Drawing number", ""))
+                is_exact = not drawing or direct[0] == drawing or row.get("Master PN", "") == drawing
+                status = "MATCH" if is_exact else "REFERENCE MATCH"
+                reason = "PartNumber appears in catalogue." if is_exact else "A variant/reference PartNumber from the PDF appears in catalogue; the drawing code remains the generated PartNumber."
+                results.append(MatchResult(analysis.source_pdf.name, status, direct[0], row.get("Master PN", ""), reason, 1))
                 continue
             if master:
                 candidates = normalized[normalized["Master PN"] == master[0]]
@@ -49,4 +53,3 @@ class CatalogueMatcher:
             if value and value not in {"UNKNOWN", "NOT_FOUND", "NEEDS REVIEW"} and column in candidates.columns:
                 candidates = candidates[candidates[column].str.upper() == value.upper()]
         return candidates
-
