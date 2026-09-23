@@ -13,6 +13,8 @@ USER_DATA_DIR = Path.home() / "Documents" / "ProductAnalyzer"
 OUTPUT_DIR = (USER_DATA_DIR / "output") if IS_FROZEN else DATA_DIR / "output"
 CACHE_DIR = (USER_DATA_DIR / "cache") if IS_FROZEN else DATA_DIR / "cache"
 TECHNICAL_DESIGNS_DIR = Path.home() / "Desktop" / "TechnicalDesigns"
+CATALOGUE_TEMPLATE = INPUT_DIR / "PrM_Lean-Catalogue_v2s.xlsx"
+LEGACY_CATALOGUE_TEMPLATE = INPUT_DIR / "PrM_Lean-Catalogue_v2s (2)-rev1.xlsx"
 
 
 def default_pdf_paths() -> tuple[Path, ...]:
@@ -32,9 +34,13 @@ def default_pdf_paths() -> tuple[Path, ...]:
     )
 
 
+def default_catalogue_path() -> Path:
+    return CATALOGUE_TEMPLATE if CATALOGUE_TEMPLATE.exists() else LEGACY_CATALOGUE_TEMPLATE
+
+
 @dataclass(frozen=True)
 class DemoSettings:
-    catalogue_path: Path = INPUT_DIR / "PrM_Lean-Catalogue_v2s (2)-rev1.xlsx"
+    catalogue_path: Path = field(default_factory=default_catalogue_path)
     pdf_paths: tuple[Path, ...] = field(default_factory=default_pdf_paths)
     focus_product_name: str = "D - MANOMETERS"
     focus_expected_count: int = 19
