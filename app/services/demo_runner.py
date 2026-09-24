@@ -188,6 +188,18 @@ class DemoRunner:
             "Extracted drain": analysis.fields.get("Drain", ""),
             "Extracted contact": analysis.fields.get("Contact", ""),
             "Extracted handle": analysis.fields.get("Handle", ""),
+            "Extracted fitting": analysis.fields.get("Fitting", ""),
+            "Extracted accuracy class": analysis.fields.get("Accuracy class", ""),
+            "Extracted outlet connection": analysis.fields.get("Outlet connection", ""),
+            "Extracted envelope dimensions": analysis.fields.get("Envelope dimensions", ""),
+            "Extracted mounting holes": analysis.fields.get("Mounting holes", ""),
+            "Extracted key slot": analysis.fields.get("Key slot", ""),
+            "Extracted working pressure": analysis.fields.get("Working pressure", ""),
+            "Extracted working temperature": analysis.fields.get("Working temperature", ""),
+            "Extracted startup temperature": analysis.fields.get("Startup temperature", ""),
+            "Extracted duty cycle": analysis.fields.get("Duty cycle", ""),
+            "Extracted starts per hour": analysis.fields.get("Starts per hour", ""),
+            "Extracted weight": analysis.fields.get("Weight", ""),
             "Detected identifiers": ", ".join(analysis.part_numbers),
             "Detected variants": ", ".join(analysis.variants),
             "BOM row count": len(analysis.bom_rows),
@@ -222,14 +234,56 @@ class DemoRunner:
         match_by_pdf = {match.source_pdf: match for match in matches}
         anomaly_rows = pd.DataFrame(anomalies)
         review_rows = pd.DataFrame([self._analysis_columns(analysis, match_by_pdf.get(analysis.source_pdf.name)) for analysis in analyses])
+        technical_rows = self._build_technical_characteristics_frame(analyses)
         self._write_template_catalogue_sheet(path, generated)
         with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
             pdf_summary.to_excel(writer, sheet_name="PDF Summary", index=False)
             review_rows.to_excel(writer, sheet_name="PDF Row Review", index=False)
+            technical_rows.to_excel(writer, sheet_name="Technical Characteristics", index=False)
             evidence.to_excel(writer, sheet_name="Extraction Evidence", index=False)
             (bom_rows if not bom_rows.empty else pd.DataFrame(columns=["SourcePDF", "ComponentPartNumber", "Quantity", "Description", "Specification", "ABC class", "EvidenceText"])).to_excel(writer, sheet_name="BOM Components", index=False)
             (match_rows if not match_rows.empty else pd.DataFrame(columns=["source_pdf", "status", "matched_part_number", "matched_master_pn", "reason", "candidate_count"])).to_excel(writer, sheet_name="Matches", index=False)
             (anomaly_rows if not anomaly_rows.empty else pd.DataFrame(columns=["Type", "Severity", "Evidence"])).to_excel(writer, sheet_name="Anomalies", index=False)
+
+    def _build_technical_characteristics_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        fields = [
+            "Diameter",
+            "LED",
+            "Pressure",
+            "Mounting",
+            "Fitting",
+            "Accuracy class",
+            "Earth lug",
+            "Outlet connection",
+            "Envelope dimensions",
+            "Mounting holes",
+            "Key slot",
+            "Working pressure",
+            "Working temperature",
+            "Startup temperature",
+            "Duty cycle",
+            "Starts per hour",
+            "Weight",
+            "Configuration",
+            "Compressor detail",
+        ]
+        rows: list[dict[str, Any]] = []
+        for analysis in analyses:
+            for field in fields:
+                value = analysis.fields.get(field, "")
+                if not value or value in {"UNKNOWN", "NOT_FOUND", "NEEDS REVIEW"}:
+                    continue
+                rows.append(
+                    {
+                        "Source PDF": analysis.source_pdf.name,
+                        "Drawing number": analysis.fields.get("Drawing number", ""),
+                        "Product Name": analysis.fields.get("Product Name", ""),
+                        "Product Type": analysis.fields.get("Product Type", ""),
+                        "Characteristic": field,
+                        "Mapped value": value,
+                    }
+                )
+        return pd.DataFrame(rows, columns=["Source PDF", "Drawing number", "Product Name", "Product Type", "Characteristic", "Mapped value"])
 
     def _write_template_catalogue_sheet(self, path: Path, generated: pd.DataFrame) -> None:
         wb = load_workbook(self.settings.catalogue_path)
@@ -272,6 +326,10 @@ class DemoRunner:
             row["Technical attribute 4"] = choose(row.get("Technical attribute 4"), analysis.fields.get("Mounting")) if prefer_existing else choose(analysis.fields.get("Mounting"), row.get("Technical attribute 4"))
             return
         if product_name == "A-BURAN COMPRESSOR":
+            row["Technical attribute 1"] = self._first_known(analysis.fields.get("Outlet connection"), analysis.fields.get("Compressor detail"), row.get("Technical attribute 1"))
+            row["Technical attribute 2"] = self._first_known(analysis.fields.get("Envelope dimensions"), row.get("Technical attribute 2"))
+            row["Technical attribute 3"] = self._join_known(analysis.fields.get("Weight"), analysis.fields.get("Working pressure"), fallback=row.get("Technical attribute 3"))
+            row["Technical attribute 4"] = self._first_known(analysis.fields.get("Mounting holes"), analysis.fields.get("Key slot"), row.get("Technical attribute 4"))
             return
         row["Technical attribute 1"] = choose(row.get("Technical attribute 1"), analysis.fields.get("Diameter")) if prefer_existing else choose(analysis.fields.get("Diameter"), row.get("Technical attribute 1"))
         row["Technical attribute 2"] = choose(row.get("Technical attribute 2"), analysis.fields.get("Drain")) if prefer_existing else choose(analysis.fields.get("Drain"), row.get("Technical attribute 2"))
@@ -340,6 +398,16 @@ class DemoRunner:
         if extracted and extracted not in {"UNKNOWN", "NOT_FOUND"}:
             return extracted
         return existing or extracted or "UNKNOWN"
+
+    def _first_known(self, *values: Any) -> str:
+        for value in values:
+            if value and str(value) not in {"UNKNOWN", "NOT_FOUND", "NEEDS REVIEW"}:
+                return str(value)
+        return ""
+
+    def _join_known(self, *values: Any, fallback: Any = "") -> str:
+        known = [str(value) for value in values if value and str(value) not in {"UNKNOWN", "NOT_FOUND", "NEEDS REVIEW"}]
+        return "; ".join(known) if known else (str(fallback) if fallback else "")
 
     def _existing_or_known(self, existing: str | None, extracted: str | None) -> str:
         if existing and existing not in {"UNKNOWN", "NOT_FOUND"}:

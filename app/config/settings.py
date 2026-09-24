@@ -13,21 +13,23 @@ USER_DATA_DIR = Path.home() / "Documents" / "ProductAnalyzer"
 OUTPUT_DIR = (USER_DATA_DIR / "output") if IS_FROZEN else DATA_DIR / "output"
 CACHE_DIR = (USER_DATA_DIR / "cache") if IS_FROZEN else DATA_DIR / "cache"
 TECHNICAL_DESIGNS_DIR = Path.home() / "Desktop" / "TechnicalDesigns"
+PROJECT_TECHNICAL_DESIGNS_DIR = ROOT_DIR / "TechnicalDesigns"
 CATALOGUE_TEMPLATE = INPUT_DIR / "PrM_Lean-Catalogue_v2s.xlsx"
 LEGACY_CATALOGUE_TEMPLATE = INPUT_DIR / "PrM_Lean-Catalogue_v2s (2)-rev1.xlsx"
 
 
 def default_pdf_paths() -> tuple[Path, ...]:
-    technical_designs = (
-        TECHNICAL_DESIGNS_DIR / "FT0024835-100_A03.pdf",
-        TECHNICAL_DESIGNS_DIR / "1-498149_B03.pdf",
-        TECHNICAL_DESIGNS_DIR / "FT0105784-100-smns_B01.pdf",
-        TECHNICAL_DESIGNS_DIR / "FT0027389-100_L00_F2.pdf",
-        TECHNICAL_DESIGNS_DIR / "FT0127469-100.pdf",
-        TECHNICAL_DESIGNS_DIR / "FT0127470-100.pdf",
-    )
-    if any(path.exists() for path in technical_designs):
-        return technical_designs
+    for base_dir in (PROJECT_TECHNICAL_DESIGNS_DIR, TECHNICAL_DESIGNS_DIR):
+        technical_designs = (
+            base_dir / "FT0024835-100_A03.pdf",
+            base_dir / "1-498149_B03.pdf",
+            base_dir / "FT0105784-100-smns_B01.pdf",
+            base_dir / "FT0027389-100_L00_F2.pdf",
+            base_dir / "FT0127469-100.pdf",
+            base_dir / "FT0127470-100.pdf",
+        )
+        if any(path.exists() for path in technical_designs):
+            return technical_designs
     return (
         INPUT_DIR / "725958XX08_AH00.pdf",
         INPUT_DIR / "FT0120872-100_C00.pdf",

@@ -76,3 +76,14 @@ def test_generated_catalogue_keeps_template_structure_and_pdf_codes(tmp_path):
         "FT0127470-100",
     }:
         assert expected_part in generated_parts
+
+
+def test_generated_catalogue_maps_additional_pdf_characteristics(tmp_path):
+    settings = DemoSettings(output_dir=tmp_path)
+    _, generated, _ = DemoRunner(settings).run()
+    by_part = generated.set_index("PartNumber")
+
+    assert by_part.loc["FT0027389-100", "Technical attribute 1"] == "TYPE 20 - 120°"
+    assert by_part.loc["FT0127469-100", "Technical attribute 1"] == 'OUTLET 3/4" GAS UNI-ISO 228'
+    assert by_part.loc["FT0127469-100", "Technical attribute 2"] == "ENVELOPE 500 x 370 x 265 mm"
+    assert "WORKING PRESSURE 11 bar(g)" in by_part.loc["FT0127470-100", "Technical attribute 3"]

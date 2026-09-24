@@ -68,9 +68,42 @@ class CharacteristicExtractor:
         fields["Handle colour"] = self._extract_colour(full_text)
         fields["Connector"] = "ISO BASE" if re.search(r"ISO BASE|EMBASE ISO", full_text, re.I) else UNKNOWN
         fields["Connector orientation"] = "NEEDS REVIEW" if re.search(r"orientation", full_text, re.I) else UNKNOWN
-        fields["Weight"] = "See bom" if re.search(r"See bom", full_text, re.I) else UNKNOWN
+        fields["Weight"] = self._extract_weight(full_text, fields["Configuration"])
         fields["LED"] = "WITH LED" if re.search(r"\bLED\b", full_text, re.I) else UNKNOWN
         fields["Mounting"] = self._extract_mounting(full_text)
+        fields["Fitting"] = self._extract_fitting(full_text, product_kind)
+        fields["Accuracy class"] = self._extract_accuracy_class(full_text)
+        fields["Earth lug"] = self._extract_earth_lug(full_text)
+        fields["Outlet connection"] = self._extract_outlet_connection(full_text)
+        fields["Envelope dimensions"] = self._extract_envelope_dimensions(full_text)
+        fields["Mounting holes"] = self._extract_mounting_holes(full_text)
+        fields["Key slot"] = self._extract_key_slot(full_text)
+        fields["Working pressure"] = self._extract_working_pressure(full_text)
+        fields["Working temperature"] = self._extract_working_temperature(full_text)
+        fields["Startup temperature"] = self._extract_startup_temperature(full_text)
+        fields["Duty cycle"] = self._extract_duty_cycle(full_text)
+        fields["Starts per hour"] = self._extract_starts_per_hour(full_text)
+        fields["Compressor detail"] = self._extract_compressor_detail(full_text)
+
+        for field in (
+            "Fitting",
+            "Accuracy class",
+            "Earth lug",
+            "Weight",
+            "Outlet connection",
+            "Envelope dimensions",
+            "Mounting holes",
+            "Key slot",
+            "Working pressure",
+            "Working temperature",
+            "Startup temperature",
+            "Duty cycle",
+            "Starts per hour",
+            "Compressor detail",
+        ):
+            value = fields.get(field, "")
+            if value and value != UNKNOWN:
+                evidence.append(self._ev(field, value, pdf_path, self._page_of(page_text, value), self._evidence_line(full_text, value), 0.82, "technical_characteristic_pattern"))
 
         part_numbers = self._extract_part_numbers(full_text)
         variants = self._extract_variants(full_text)
@@ -245,6 +278,40 @@ class CharacteristicExtractor:
                 return value
         return UNKNOWN
 
+    def _extract_working_temperature(self, text: str) -> str:
+        direct = self._extract_temperature(text)
+        if direct != UNKNOWN:
+            return direct
+        match = re.search(r"WORKING TEMPERATURE[\s\S]{0,120}?FROM\s+(-?\d+)\s*°?\s*C?[\s\S]{0,40}?TO\s+([+]?\d+)\s*°?\s*C", text, re.I)
+        if match:
+            return f"{match.group(1)} °C to {match.group(2)} °C"
+        return UNKNOWN
+
+    def _extract_startup_temperature(self, text: str) -> str:
+        match = re.search(r"START\s*UP\s+ALLOWED\s+FROM\s+(-?\d+)\s*°?\s*C?\s+TO\s+([+]?\d+)\s*°?\s*C", text, re.I)
+        if match:
+            return f"START UP {match.group(1)} °C to {match.group(2)} °C"
+        return UNKNOWN
+
+    def _extract_working_pressure(self, text: str) -> str:
+        match = re.search(r"WORKING PRESSURE[\s\S]{0,80}?MAX\.?\s+(\d+(?:[,.]\d+)?)\s*bar", text, re.I)
+        if match:
+            return f"WORKING PRESSURE {match.group(1).replace(',', '.')} bar(g)"
+        return UNKNOWN
+
+    def _extract_duty_cycle(self, text: str) -> str:
+        match = re.search(r"DUTY CYCLE[\s\S]{0,100}?FROM\s+(\d+)\s+.*?TO\s+(\d+)\s*%", text, re.I)
+        if match:
+            return f"DUTY CYCLE {match.group(1)}-{match.group(2)}%"
+        direct = self._first(r"(DC\s*\d+\s*-\s*\d+%)", text)
+        return direct.upper().replace(" ", "") if direct else UNKNOWN
+
+    def _extract_starts_per_hour(self, text: str) -> str:
+        match = re.search(r"STARTS PER HOUR[\s\S]{0,40}?MAX\.?\s*(?:N°\s*)?(\d+)", text, re.I)
+        if match:
+            return f"MAX {match.group(1)} STARTS/HOUR"
+        return UNKNOWN
+
     def _normalize_pressure_value(self, value: str) -> str:
         normalized = re.sub(r"\s+", "", value).replace("÷", "-").replace("TO", "-").replace("to", "-")
         normalized = normalized.replace("bar", "")
@@ -286,6 +353,118 @@ class CharacteristicExtractor:
         if adjustment:
             return f"MOUNTING {value} (Adjustment {adjustment.replace(' ', '')})"
         return f"MOUNTING {value}"
+
+    def _extract_fitting(self, text: str, product_kind: str) -> str:
+        if product_kind == "MANOMETER":
+            match = re.search(r"\b(One|Two|\d+|2\s+STCK\.?)[ \t]+(?:FITTINGS?[ \t]+)?M16x1[,.]5(?:[ \t]+(?:GEM\.|ACCORDING TO|ACC\.)[ \t]+[A-Z0-9.,/ \t-]+)?", text, re.I)
+            if match:
+                value = clean_cell(match.group(0)).upper().replace("STCK.", "FITTINGS").replace(",", ".")
+                value = re.sub(r"\s+", " ", value)
+                return value
+        fitting = self._first(r"\b(\d(?:/\d)?\"\s*GAS\s+UNI-ISO\s+228)\b", text)
+        return fitting.upper() if fitting else UNKNOWN
+
+    def _extract_accuracy_class(self, text: str) -> str:
+        match = re.search(r"(?:ACCURACY\s+)?CLASS\s+(\d[,.]\d+)", text, re.I)
+        if match:
+            return f"CLASS {match.group(1).replace(',', '.')}"
+        return UNKNOWN
+
+    def _extract_earth_lug(self, text: str) -> str:
+        match = re.search(r"Earth Lug\s+With Hole\s+(\d+)", text, re.I)
+        if match:
+            return f"EARTH LUG HOLE {match.group(1)}"
+        return UNKNOWN
+
+    def _extract_outlet_connection(self, text: str) -> str:
+        lines = [clean_cell(line) for line in text.splitlines() if clean_cell(line)]
+        for i, line in enumerate(lines):
+            if re.search(r"COMPRESSED AIR OUTLET|USCITA ARIA COMPRESSA", line, re.I):
+                window = lines[i : i + 5]
+                for item in window:
+                    if re.search(r"\b\d(?:/\d)?\"\s*GAS\s+UNI-ISO\s+228\b", item, re.I):
+                        return f"OUTLET {item.upper()}"
+        return UNKNOWN
+
+    def _extract_envelope_dimensions(self, text: str) -> str:
+        lines = [clean_cell(line) for line in text.splitlines() if clean_cell(line)]
+        for i, line in enumerate(lines):
+            if re.search(r"AFTER COOLER|INTER COOLER", line, re.I):
+                values: list[float] = []
+                for item in lines[i : i + 14]:
+                    if re.fullmatch(r"\d{2,4}", item):
+                        value = float(item)
+                        if value >= 100:
+                            values.append(value)
+                unique: list[float] = []
+                for value in values:
+                    if value not in unique:
+                        unique.append(value)
+                if len(unique) >= 3:
+                    dims = unique[:3]
+                    return "ENVELOPE " + " x ".join(self._format_number(v) for v in dims) + " mm"
+        for i, line in enumerate(lines):
+            if re.search(r"COMPRESSED AIR OUTLET|USCITA ARIA COMPRESSA", line, re.I):
+                values: list[float] = []
+                for item in lines[max(0, i - 18) : i]:
+                    if re.fullmatch(r"\d{2,4}(?:[,.]\d+)?", item):
+                        value = float(item.replace(",", "."))
+                        if value >= 100:
+                            values.append(value)
+                unique: list[float] = []
+                for value in values:
+                    if value not in unique:
+                        unique.append(value)
+                if len(unique) >= 4:
+                    dims = [unique[0], unique[2], unique[3]]
+                    return "ENVELOPE " + " x ".join(self._format_number(v) for v in dims) + " mm"
+        return UNKNOWN
+
+    def _extract_mounting_holes(self, text: str) -> str:
+        match = re.search(r"(N[°º]\s*4\s+(?:M8\s+HELICOIL|HELI-COILS?\s+M10|HELICOIL\s+M8))", text, re.I)
+        if match:
+            value = clean_cell(match.group(1)).upper().replace("HELI-COILS", "HELICOILS")
+            return re.sub(r"\s+", " ", value)
+        return UNKNOWN
+
+    def _extract_key_slot(self, text: str) -> str:
+        match = re.search(r"PARALLEL KEY SLOT[\s\S]{0,80}?(\d+\s*[xX]\s*\d+\s*[xX]\s*\d+)", text, re.I)
+        if match:
+            return f"KEY SLOT {match.group(1).replace(' ', '').upper()}"
+        return UNKNOWN
+
+    def _extract_weight(self, text: str, configuration: str) -> str:
+        if re.search(r"See bom", text, re.I):
+            return "See bom"
+        if configuration == "HIGH HUMIDITY CONFIGURATION":
+            match = re.search(r"HIGH HUMIDITY CONFIGURATION\s+(\d+(?:[,.]\d+)?)\s*(?:kg)?", text, re.I)
+            if match:
+                return f"WEIGHT {match.group(1).replace(',', '.')} kg"
+        match = re.search(r"WEIGHT[\s\S]{0,100}?STANDARD CONFIGURATION\s+(\d+(?:[,.]\d+)?)\s*kg", text, re.I)
+        if match:
+            return f"WEIGHT {match.group(1).replace(',', '.')} kg"
+        match = re.search(r"\b(\d+(?:[,.]\d+)?)\s*kg\b", text, re.I)
+        if match:
+            return f"WEIGHT {match.group(1).replace(',', '.')} kg"
+        return UNKNOWN
+
+    def _extract_compressor_detail(self, text: str) -> str:
+        detail = self._first(r"\b(TYPE\s+\d+\s*-\s*\d+°)", text)
+        if detail:
+            return detail.upper()
+        buran = self._first(r"\b(BURAN\s+\d+[A-Z]?)\b", text)
+        return buran.upper() if buran else UNKNOWN
+
+    def _format_number(self, value: float) -> str:
+        return str(int(value)) if value.is_integer() else str(value).replace(".", ",")
+
+    def _evidence_line(self, text: str, value: str) -> str:
+        token = value.split(" ", 1)[-1].split(";")[0].strip()
+        token = token.replace("WEIGHT ", "").replace("OUTLET ", "").replace("ENVELOPE ", "")
+        for line in text.splitlines():
+            if token and token.lower() in line.lower():
+                return line
+        return value
 
     def _extract_variants(self, text: str) -> list[str]:
         raw = re.findall(r"\b(?:Var\.?|VAR|Variant(?:e)?s?)\s*(?:/ Variants)?\s*[:.]?\s*([A-Z0-9/ \-\u00e0toFT]+)", text, re.I)

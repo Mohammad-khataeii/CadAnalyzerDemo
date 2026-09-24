@@ -8,7 +8,7 @@ a = Analysis(
     ["app/main.py"],
     pathex=[],
     binaries=[],
-    datas=[("data/input", "data/input")],
+    datas=[("data/input", "data/input"), ("TechnicalDesigns", "TechnicalDesigns")],
     hiddenimports=collect_submodules("sklearn") + collect_submodules("PySide6"),
     hookspath=[],
     hooksconfig={},
@@ -36,4 +36,3 @@ exe = EXE(
     runtime_tmpdir=None,
     console=False,
 )
-
