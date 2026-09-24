@@ -61,10 +61,7 @@ def test_demo_exports(tmp_path):
     assert progress[-1][0] == 100
     assert [p for p, _ in progress] == sorted(p for p, _ in progress)
     workbook = pd.ExcelFile(result.output_files["catalogue_xlsx"])
-    assert "Technical Summary" in workbook.sheet_names
-    assert "Technical Characteristics" in workbook.sheet_names
-    assert "Generated Catalogue Extended" in workbook.sheet_names
-    assert result.output_files["extended_catalogue_csv"].exists()
+    assert workbook.sheet_names == ["BRAKES_LEAN-CATALOGUE V2_TECH"]
 
 
 def test_generated_catalogue_keeps_template_structure_and_pdf_codes(tmp_path):
@@ -98,27 +95,27 @@ def test_generated_catalogue_maps_additional_pdf_characteristics(tmp_path):
 
 def test_generated_workbook_contains_aggressive_technical_characteristics(tmp_path):
     settings = DemoSettings(output_dir=tmp_path)
-    result, _, _ = DemoRunner(settings).run()
-    technical = pd.read_excel(result.output_files["catalogue_xlsx"], sheet_name="Technical Characteristics").fillna("")
-    summary = pd.read_excel(result.output_files["catalogue_xlsx"], sheet_name="Technical Summary").fillna("")
+    result, _, evidence = DemoRunner(settings).run()
+    catalogue = pd.read_excel(result.output_files["catalogue_xlsx"], sheet_name="BRAKES_LEAN-CATALOGUE V2_TECH", header=3).drop(columns=["Unnamed: 0"], errors="ignore").fillna("")
 
-    assert len(technical) >= 150
-    assert {"material", "standard", "electrical", "pressure", "temperature"}.issubset(set(technical["Category"]))
-    assert "STAINLESS STEEL" in set(technical["Mapped value"])
-    assert any(technical["Mapped value"].astype(str).str.contains("IP54|IP 54", regex=True))
-    assert not summary.empty
+    assert "Technical attribute 12" in catalogue.columns
+    assert len(evidence[evidence["extraction_method"].eq("technical_miner_tfidf")]) >= 150
+    assert any(catalogue["Technical attribute 5"].astype(str).str.contains("IP54|IP 54", regex=True))
+    assert any(catalogue["Technical attribute 9"].astype(str).str.contains("STAINLESS STEEL|stainless steel", regex=True))
+    assert any(catalogue["Technical attribute 12"].astype(str).str.contains("EN 837-1|ISO 8573-1", regex=True))
 
 
 def test_extended_catalogue_promotes_mined_manometer_characteristics(tmp_path):
     settings = DemoSettings(output_dir=tmp_path)
     result, generated, _ = DemoRunner(settings).run()
-    extended = pd.read_excel(result.output_files["catalogue_xlsx"], sheet_name="Generated Catalogue Extended").fillna("")
-    by_part = extended.set_index("PartNumber")
+    workbook_catalogue = pd.read_excel(result.output_files["catalogue_xlsx"], sheet_name="BRAKES_LEAN-CATALOGUE V2_TECH", header=3).drop(columns=["Unnamed: 0"], errors="ignore").fillna("")
+    by_part = workbook_catalogue.set_index("PartNumber")
     main_by_part = generated.set_index("PartNumber")
 
-    assert by_part.loc["FT0105784-100", "Compressed air quality"] == "3-4-3 ISO 8573-1"
-    assert "IP 54" in by_part.loc["FT0105784-100", "Protection degree"]
-    assert "EN 837-1" in by_part.loc["FT0105784-100", "Standards"]
-    assert "BLOW-OUT 13" in by_part.loc["FT0105784-100", "Safety blow-out"]
-    assert "CLASS 1.0" in main_by_part.loc["FT0105784-100", "Technical attribute 1"]
-    assert "3-4-3 ISO 8573-1" in main_by_part.loc["FT0105784-100", "Technical attribute 3"]
+    assert "Technical attribute 12" in workbook_catalogue.columns
+    assert "CLASS 1.0" in by_part.loc["FT0105784-100", "Technical attribute 5"]
+    assert "IP 54" in by_part.loc["FT0105784-100", "Technical attribute 5"]
+    assert "3-4-3 ISO 8573-1" in by_part.loc["FT0105784-100", "Technical attribute 8"]
+    assert "BLOW-OUT 13" in by_part.loc["FT0105784-100", "Technical attribute 11"]
+    assert "EN 837-1" in by_part.loc["FT0105784-100", "Technical attribute 12"]
+    assert main_by_part.loc["FT0105784-100", "Technical attribute 1"] == "DIAMETER 80"

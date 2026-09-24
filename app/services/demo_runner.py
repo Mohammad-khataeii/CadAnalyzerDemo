@@ -80,10 +80,8 @@ class DemoRunner:
         output_files["bom_csv"] = output_dir / "bom_components.csv"
         output_files["focus_catalogue_csv"] = output_dir / "focus_catalogue.csv"
         output_files["focus_catalogue_xlsx"] = output_dir / "focus_catalogue.xlsx"
-        output_files["extended_catalogue_csv"] = output_dir / "catalogue_generated_extended.csv"
-        extended_catalogue = self._build_extended_catalogue(generated, analyses)
-        generated.to_csv(output_files["catalogue_csv"], index=False)
-        extended_catalogue.to_csv(output_files["extended_catalogue_csv"], index=False)
+        client_catalogue = self._build_client_catalogue(generated, analyses)
+        client_catalogue.to_csv(output_files["catalogue_csv"], index=False)
         self._write_catalogue_workbook(output_files["catalogue_xlsx"], generated, analyses, matches, evidence, anomalies)
         analysis_catalogue.to_csv(output_files["focus_catalogue_csv"], index=False)
         analysis_catalogue.to_excel(output_files["focus_catalogue_xlsx"], index=False)
@@ -228,43 +226,8 @@ class DemoRunner:
         }
 
     def _write_catalogue_workbook(self, path: Path, generated: pd.DataFrame, analyses: list[Any], matches: list[Any], evidence: pd.DataFrame, anomalies: list[dict[str, Any]]) -> None:
-        pdf_summary = pd.DataFrame(
-            [
-                {
-                    "Source PDF": analysis.source_pdf.name,
-                    "Pages": analysis.page_count,
-                    "Drawing number": analysis.fields.get("Drawing number", ""),
-                    "Drawing title": analysis.fields.get("Drawing title", ""),
-                    "Product Family": analysis.fields.get("Product Family", ""),
-                    "Product Name": analysis.fields.get("Product Name", ""),
-                    "Product Type": analysis.fields.get("Product Type", ""),
-                    "Identifiers": ", ".join(analysis.part_numbers),
-                    "Variants": ", ".join(analysis.variants),
-                    "BOM rows": len(analysis.bom_rows),
-                    "Warnings": "; ".join(analysis.warnings),
-                }
-                for analysis in analyses
-            ]
-        )
-        bom_rows = pd.DataFrame([row for analysis in analyses for row in analysis.bom_rows])
-        match_rows = pd.DataFrame([match.__dict__ for match in matches])
-        match_by_pdf = {match.source_pdf: match for match in matches}
-        anomaly_rows = pd.DataFrame(anomalies)
-        review_rows = pd.DataFrame([self._analysis_columns(analysis, match_by_pdf.get(analysis.source_pdf.name)) for analysis in analyses])
-        technical_rows = self._build_technical_characteristics_frame(analyses)
-        technical_summary = self._build_technical_summary_frame(technical_rows)
-        extended_catalogue = self._build_extended_catalogue(generated, analyses)
-        self._write_template_catalogue_sheet(path, generated)
-        with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
-            extended_catalogue.to_excel(writer, sheet_name="Generated Catalogue Extended", index=False)
-            pdf_summary.to_excel(writer, sheet_name="PDF Summary", index=False)
-            review_rows.to_excel(writer, sheet_name="PDF Row Review", index=False)
-            technical_summary.to_excel(writer, sheet_name="Technical Summary", index=False)
-            technical_rows.to_excel(writer, sheet_name="Technical Characteristics", index=False)
-            evidence.to_excel(writer, sheet_name="Extraction Evidence", index=False)
-            (bom_rows if not bom_rows.empty else pd.DataFrame(columns=["SourcePDF", "ComponentPartNumber", "Quantity", "Description", "Specification", "ABC class", "EvidenceText"])).to_excel(writer, sheet_name="BOM Components", index=False)
-            (match_rows if not match_rows.empty else pd.DataFrame(columns=["source_pdf", "status", "matched_part_number", "matched_master_pn", "reason", "candidate_count"])).to_excel(writer, sheet_name="Matches", index=False)
-            (anomaly_rows if not anomaly_rows.empty else pd.DataFrame(columns=["Type", "Severity", "Evidence"])).to_excel(writer, sheet_name="Anomalies", index=False)
+        client_catalogue = self._build_client_catalogue(generated, analyses)
+        self._write_template_catalogue_sheet(path, client_catalogue)
 
     def _build_technical_characteristics_frame(self, analyses: list[Any]) -> pd.DataFrame:
         fields = [
@@ -368,72 +331,61 @@ class DemoRunner:
         summary["Average confidence"] = summary["Average confidence"].round(2).fillna("")
         return summary[columns].sort_values(["Source PDF", "Category"])
 
-    def _build_extended_catalogue(self, generated: pd.DataFrame, analyses: list[Any]) -> pd.DataFrame:
-        extra_fields = [
-            "Source PDF",
-            "Drawing number",
-            "Drawing revision",
-            "Drawing title",
-            "Diameter",
-            "Pressure",
-            "Accuracy class",
-            "Working temperature",
-            "Compressed air quality",
-            "Protection degree",
-            "LED",
-            "Electrical rating",
-            "Illumination detail",
-            "Fitting",
-            "Process connection",
-            "Mounting",
-            "Case material",
-            "Frame ring",
-            "Dial",
-            "Pointer",
-            "Pointer system",
-            "Color coding",
-            "Lens",
-            "Restrictor screw",
-            "Safety blow-out",
-            "Material finishes",
-            "Standards",
-        ]
-        category_columns = {
-            "component": "All component details",
-            "connection": "All connection details",
-            "electrical": "All electrical details",
-            "illumination": "All illumination details",
-            "material": "All material details",
-            "media": "All media/air quality details",
-            "protection": "All protection details",
-            "standard": "All standards",
-            "temperature": "All temperature details",
-        }
+    def _build_client_catalogue(self, generated: pd.DataFrame, analyses: list[Any]) -> pd.DataFrame:
         rows: list[dict[str, Any]] = []
-        generated_rows = generated.to_dict("records")
-        for idx, analysis in enumerate(analyses):
-            base = dict(generated_rows[idx]) if idx < len(generated_rows) else {}
-            base["Source PDF"] = analysis.source_pdf.name
-            for field in extra_fields:
-                if field == "Source PDF":
-                    continue
-                base[field] = analysis.fields.get(field, "")
-            category_values: dict[str, list[str]] = {category: [] for category in category_columns}
-            for key, value in analysis.fields.items():
-                if not key.startswith("Technical characteristic|") or not value:
-                    continue
-                _, category, name, _idx = key.split("|", 3)
-                if category not in category_values:
-                    continue
-                labelled = f"{name}: {value}"
-                if labelled not in category_values[category]:
-                    category_values[category].append(labelled)
-            for category, column in category_columns.items():
-                base[column] = "; ".join(category_values[category])
-            rows.append(base)
-        ordered = list(generated.columns) + [field for field in extra_fields if field not in generated.columns]
-        ordered.extend(column for column in category_columns.values() if column not in ordered)
-        return pd.DataFrame(rows, columns=ordered)
+        for row, analysis in zip(generated.to_dict("records"), analyses):
+            enriched = dict(row)
+            enriched["Technical attribute 5"] = self._join_known_limited(
+                analysis.fields.get("Accuracy class"),
+                analysis.fields.get("Protection degree"),
+                max_items=4,
+            )
+            enriched["Technical attribute 6"] = self._join_known_limited(
+                analysis.fields.get("Electrical rating"),
+                analysis.fields.get("Illumination detail"),
+                max_items=4,
+            )
+            enriched["Technical attribute 7"] = self._join_known_limited(
+                analysis.fields.get("Fitting"),
+                analysis.fields.get("Process connection"),
+                max_items=4,
+            )
+            enriched["Technical attribute 8"] = self._join_known_limited(
+                analysis.fields.get("Working temperature") or analysis.fields.get("Temperature"),
+                analysis.fields.get("Compressed air quality"),
+                max_items=4,
+            )
+            enriched["Technical attribute 9"] = self._join_known_limited(
+                analysis.fields.get("Case material"),
+                analysis.fields.get("Frame ring"),
+                analysis.fields.get("Dial"),
+                analysis.fields.get("Material finishes"),
+                max_items=5,
+            )
+            enriched["Technical attribute 10"] = self._join_known_limited(
+                analysis.fields.get("Pointer"),
+                analysis.fields.get("Pointer system"),
+                analysis.fields.get("Color coding"),
+                max_items=4,
+            )
+            enriched["Technical attribute 11"] = self._join_known_limited(
+                analysis.fields.get("Lens"),
+                analysis.fields.get("Restrictor screw"),
+                analysis.fields.get("Safety blow-out"),
+                max_items=4,
+            )
+            enriched["Technical attribute 12"] = self._join_known_limited(
+                analysis.fields.get("Standards"),
+                max_items=8,
+            )
+            rows.append(enriched)
+
+        columns = list(generated.columns)
+        insert_at = columns.index("Technical attribute 4") + 1 if "Technical attribute 4" in columns else len(columns)
+        extra_columns = [f"Technical attribute {number}" for number in range(5, 13)]
+        for offset, column in enumerate(extra_columns):
+            columns.insert(insert_at + offset, column)
+        return pd.DataFrame(rows, columns=columns)
 
     def _technical_evidence_lookup(self, analysis: Any) -> dict[tuple[str, str], dict[str, Any]]:
         lookup: dict[tuple[str, str], dict[str, Any]] = {}
@@ -490,28 +442,78 @@ class DemoRunner:
         header_row = 4
         first_data_row = 5
         first_catalogue_col = 2
-        headers = [ws.cell(header_row, column).value for column in range(first_catalogue_col, ws.max_column + 1)]
-        style_source_row = first_data_row if ws.max_row >= first_data_row else header_row
-        style_by_column = {
+        original_headers = [ws.cell(header_row, column).value for column in range(first_catalogue_col, ws.max_column + 1)]
+        headers = list(generated.columns)
+        added_headers = [header for header in headers if header not in original_headers]
+        if added_headers and "Technical attribute 4" in original_headers:
+            insert_at = first_catalogue_col + original_headers.index("Technical attribute 4") + 1
+            source_col = insert_at - 1
+            ws.insert_cols(insert_at, amount=len(added_headers))
+            for column in range(insert_at, insert_at + len(added_headers)):
+                source_letter = ws.cell(header_row, source_col).column_letter
+                target_letter = ws.cell(header_row, column).column_letter
+                ws.column_dimensions[target_letter].width = ws.column_dimensions[source_letter].width
+                for row in range(1, first_data_row + 1):
+                    target = ws.cell(row, column)
+                    source = ws.cell(row, source_col)
+                    target._style = copy(source._style)
+                    target.number_format = source.number_format
+                    target.alignment = copy(source.alignment)
+                    target.protection = copy(source.protection)
+                    target.fill = copy(source.fill)
+                    target.font = copy(source.font)
+                    target.border = copy(source.border)
+        header_style_by_column = {
             column: {
-                "style": copy(ws.cell(style_source_row, column)._style),
-                "number_format": ws.cell(style_source_row, column).number_format,
-                "alignment": copy(ws.cell(style_source_row, column).alignment),
-                "protection": copy(ws.cell(style_source_row, column).protection),
+                "style": copy(ws.cell(header_row, column)._style),
+                "number_format": ws.cell(header_row, column).number_format,
+                "alignment": copy(ws.cell(header_row, column).alignment),
+                "protection": copy(ws.cell(header_row, column).protection),
+                "fill": copy(ws.cell(header_row, column).fill),
+                "font": copy(ws.cell(header_row, column).font),
+                "border": copy(ws.cell(header_row, column).border),
             }
-            for column in range(first_catalogue_col, ws.max_column + 1)
+            for column in range(first_catalogue_col, first_catalogue_col + len(headers))
         }
+        data_style_source_row = first_data_row if ws.max_row >= first_data_row else header_row
+        data_style_by_column = {
+            column: {
+                "style": copy(ws.cell(data_style_source_row, column)._style),
+                "number_format": ws.cell(data_style_source_row, column).number_format,
+                "alignment": copy(ws.cell(data_style_source_row, column).alignment),
+                "protection": copy(ws.cell(data_style_source_row, column).protection),
+                "fill": copy(ws.cell(data_style_source_row, column).fill),
+                "font": copy(ws.cell(data_style_source_row, column).font),
+                "border": copy(ws.cell(data_style_source_row, column).border),
+            }
+            for column in range(first_catalogue_col, first_catalogue_col + len(headers))
+        }
+        for column_offset, header in enumerate(headers, start=first_catalogue_col):
+            cell = ws.cell(header_row, column_offset)
+            cell.value = header
+            if column_offset in header_style_by_column:
+                source = header_style_by_column[column_offset]
+                cell._style = copy(source["style"])
+                cell.number_format = source["number_format"]
+                cell.alignment = copy(source["alignment"])
+                cell.protection = copy(source["protection"])
+                cell.fill = copy(source["fill"])
+                cell.font = copy(source["font"])
+                cell.border = copy(source["border"])
         if ws.max_row >= first_data_row:
             ws.delete_rows(first_data_row, ws.max_row - first_data_row + 1)
         for row_offset, record in enumerate(generated.to_dict("records"), start=first_data_row):
             for column_offset, header in enumerate(headers, start=first_catalogue_col):
                 cell = ws.cell(row_offset, column_offset)
                 cell.value = record.get(header, "")
-                source = style_by_column[column_offset]
+                source = data_style_by_column[column_offset]
                 cell._style = copy(source["style"])
                 cell.number_format = source["number_format"]
                 cell.alignment = copy(source["alignment"])
                 cell.protection = copy(source["protection"])
+                cell.fill = copy(source["fill"])
+                cell.font = copy(source["font"])
+                cell.border = copy(source["border"])
         ws.freeze_panes = "B5"
         wb.save(path)
 
@@ -519,35 +521,10 @@ class DemoRunner:
         choose = self._existing_or_known if prefer_existing else self._known_or_existing
         product_name = analysis.fields.get("Product Name", "")
         if product_name == "D - MANOMETERS":
-            row["Technical attribute 1"] = self._join_known_limited(
-                analysis.fields.get("Diameter"),
-                analysis.fields.get("Pressure"),
-                analysis.fields.get("Accuracy class"),
-                fallback=row.get("Technical attribute 1"),
-            )
-            row["Technical attribute 2"] = self._join_known_limited(
-                analysis.fields.get("LED"),
-                analysis.fields.get("Electrical rating"),
-                analysis.fields.get("Protection degree"),
-                fallback=row.get("Technical attribute 2"),
-                max_items=5,
-            )
-            row["Technical attribute 3"] = self._join_known_limited(
-                analysis.fields.get("Fitting"),
-                analysis.fields.get("Working temperature") or analysis.fields.get("Temperature"),
-                analysis.fields.get("Compressed air quality"),
-                analysis.fields.get("Process connection"),
-                fallback=row.get("Technical attribute 3"),
-                max_items=5,
-            )
-            row["Technical attribute 4"] = self._join_known_limited(
-                analysis.fields.get("Mounting"),
-                analysis.fields.get("Case material"),
-                analysis.fields.get("Frame ring"),
-                analysis.fields.get("Safety blow-out"),
-                fallback=row.get("Technical attribute 4"),
-                max_items=5,
-            )
+            row["Technical attribute 1"] = choose(row.get("Technical attribute 1"), analysis.fields.get("Diameter")) if prefer_existing else choose(analysis.fields.get("Diameter"), row.get("Technical attribute 1"))
+            row["Technical attribute 2"] = choose(row.get("Technical attribute 2"), analysis.fields.get("LED")) if prefer_existing else choose(analysis.fields.get("LED"), row.get("Technical attribute 2"))
+            row["Technical attribute 3"] = choose(row.get("Technical attribute 3"), analysis.fields.get("Pressure")) if prefer_existing else choose(analysis.fields.get("Pressure"), row.get("Technical attribute 3"))
+            row["Technical attribute 4"] = choose(row.get("Technical attribute 4"), analysis.fields.get("Mounting")) if prefer_existing else choose(analysis.fields.get("Mounting"), row.get("Technical attribute 4"))
             return
         if product_name == "A-BURAN COMPRESSOR":
             row["Technical attribute 1"] = self._first_known(analysis.fields.get("Outlet connection"), analysis.fields.get("Compressor detail"), row.get("Technical attribute 1"))
