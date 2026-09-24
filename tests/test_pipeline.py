@@ -63,6 +63,8 @@ def test_demo_exports(tmp_path):
     workbook = pd.ExcelFile(result.output_files["catalogue_xlsx"])
     assert "Technical Summary" in workbook.sheet_names
     assert "Technical Characteristics" in workbook.sheet_names
+    assert "Generated Catalogue Extended" in workbook.sheet_names
+    assert result.output_files["extended_catalogue_csv"].exists()
 
 
 def test_generated_catalogue_keeps_template_structure_and_pdf_codes(tmp_path):
@@ -105,3 +107,18 @@ def test_generated_workbook_contains_aggressive_technical_characteristics(tmp_pa
     assert "STAINLESS STEEL" in set(technical["Mapped value"])
     assert any(technical["Mapped value"].astype(str).str.contains("IP54|IP 54", regex=True))
     assert not summary.empty
+
+
+def test_extended_catalogue_promotes_mined_manometer_characteristics(tmp_path):
+    settings = DemoSettings(output_dir=tmp_path)
+    result, generated, _ = DemoRunner(settings).run()
+    extended = pd.read_excel(result.output_files["catalogue_xlsx"], sheet_name="Generated Catalogue Extended").fillna("")
+    by_part = extended.set_index("PartNumber")
+    main_by_part = generated.set_index("PartNumber")
+
+    assert by_part.loc["FT0105784-100", "Compressed air quality"] == "3-4-3 ISO 8573-1"
+    assert "IP 54" in by_part.loc["FT0105784-100", "Protection degree"]
+    assert "EN 837-1" in by_part.loc["FT0105784-100", "Standards"]
+    assert "BLOW-OUT 13" in by_part.loc["FT0105784-100", "Safety blow-out"]
+    assert "CLASS 1.0" in main_by_part.loc["FT0105784-100", "Technical attribute 1"]
+    assert "3-4-3 ISO 8573-1" in main_by_part.loc["FT0105784-100", "Technical attribute 3"]

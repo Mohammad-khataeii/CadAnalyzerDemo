@@ -89,10 +89,46 @@ class CharacteristicExtractor:
         fields["Starts per hour"] = self._extract_starts_per_hour(full_text)
         fields["Compressor detail"] = self._extract_compressor_detail(full_text)
 
+        characteristics = self.technical_miner.extract(full_text)
+        promoted_evidence: list[Evidence] = []
+        for characteristic in characteristics:
+            promoted_field = self._promoted_field_name(characteristic.category, characteristic.name)
+            if not promoted_field:
+                continue
+            existing = fields.get(promoted_field, "")
+            fields[promoted_field] = self._merge_field_value(promoted_field, existing, characteristic.value)
+            promoted_evidence.append(
+                self._ev(
+                    promoted_field,
+                    characteristic.value,
+                    pdf_path,
+                    self._page_of(page_text, characteristic.evidence or characteristic.value),
+                    characteristic.evidence,
+                    max(0.7, characteristic.confidence),
+                    "promoted_technical_miner",
+                )
+            )
+
         for field in (
             "Fitting",
             "Accuracy class",
             "Earth lug",
+            "Protection degree",
+            "Electrical rating",
+            "Illumination detail",
+            "Compressed air quality",
+            "Case material",
+            "Frame ring",
+            "Dial",
+            "Pointer",
+            "Pointer system",
+            "Color coding",
+            "Process connection",
+            "Lens",
+            "Restrictor screw",
+            "Safety blow-out",
+            "Standards",
+            "Material finishes",
             "Weight",
             "Outlet connection",
             "Envelope dimensions",
@@ -108,8 +144,9 @@ class CharacteristicExtractor:
             value = fields.get(field, "")
             if value and value != UNKNOWN:
                 evidence.append(self._ev(field, value, pdf_path, self._page_of(page_text, value), self._evidence_line(full_text, value), 0.82, "technical_characteristic_pattern"))
+        evidence.extend(promoted_evidence)
 
-        for idx, characteristic in enumerate(self.technical_miner.extract(full_text), start=1):
+        for idx, characteristic in enumerate(characteristics, start=1):
             field_key = f"Technical characteristic|{characteristic.category}|{characteristic.name}|{idx:03d}"
             fields[field_key] = characteristic.value
             evidence.append(
@@ -127,6 +164,55 @@ class CharacteristicExtractor:
         part_numbers = self._extract_part_numbers(full_text)
         variants = self._extract_variants(full_text)
         return fields, evidence, part_numbers, variants
+
+    def _promoted_field_name(self, category: str, name: str) -> str:
+        key = (category.lower(), name.lower())
+        mapping = {
+            ("standard", "accuracy class"): "Accuracy class",
+            ("protection", "protection degree"): "Protection degree",
+            ("standard", "protection degree"): "Protection degree",
+            ("electrical", "electrical rating"): "Electrical rating",
+            ("illumination", "illumination"): "Illumination detail",
+            ("media", "compressed air quality"): "Compressed air quality",
+            ("material", "case"): "Case material",
+            ("material", "frame ring"): "Frame ring",
+            ("material", "dial"): "Dial",
+            ("material", "pointer"): "Pointer",
+            ("component", "pointer system"): "Pointer system",
+            ("component", "color coding"): "Color coding",
+            ("component", "process connection"): "Process connection",
+            ("component", "illumination detail"): "Illumination detail",
+            ("component", "lens"): "Lens",
+            ("component", "restrictor screw"): "Restrictor screw",
+            ("component", "safety blow-out"): "Safety blow-out",
+            ("standard", "standard / norm"): "Standards",
+            ("material", "material / finish"): "Material finishes",
+        }
+        return mapping.get(key, "")
+
+    def _merge_field_value(self, field: str, existing: str, value: str) -> str:
+        cleaned = self._normalize_promoted_value(field, value)
+        if not cleaned:
+            return existing
+        current = [] if existing in {"", UNKNOWN, NOT_FOUND, "NEEDS REVIEW"} else [item.strip() for item in existing.split(";") if item.strip()]
+        current_keys = {self._field_value_key(field, item) for item in current}
+        if self._field_value_key(field, cleaned) not in current_keys:
+            current.append(cleaned)
+        return "; ".join(current)
+
+    def _normalize_promoted_value(self, field: str, value: str) -> str:
+        cleaned = clean_cell(value)
+        if field == "Accuracy class" and cleaned and not cleaned.upper().startswith("CLASS"):
+            return f"CLASS {cleaned.replace(',', '.')}"
+        if field == "Electrical rating":
+            cleaned = re.sub(r"\b(\d+)\s*(Vdc|Vac|V|W|A)\b", lambda m: f"{m.group(1)} {m.group(2)}", cleaned, flags=re.I)
+        return cleaned
+
+    def _field_value_key(self, field: str, value: str) -> str:
+        key = clean_cell(value).lower().replace(" ", "").replace(",", ".")
+        if field == "Accuracy class":
+            key = key.replace("class", "")
+        return key
 
     def _extract_part_numbers(self, text: str) -> list[str]:
         values: list[str] = []

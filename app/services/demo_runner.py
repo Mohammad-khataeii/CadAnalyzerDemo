@@ -80,7 +80,10 @@ class DemoRunner:
         output_files["bom_csv"] = output_dir / "bom_components.csv"
         output_files["focus_catalogue_csv"] = output_dir / "focus_catalogue.csv"
         output_files["focus_catalogue_xlsx"] = output_dir / "focus_catalogue.xlsx"
+        output_files["extended_catalogue_csv"] = output_dir / "catalogue_generated_extended.csv"
+        extended_catalogue = self._build_extended_catalogue(generated, analyses)
         generated.to_csv(output_files["catalogue_csv"], index=False)
+        extended_catalogue.to_csv(output_files["extended_catalogue_csv"], index=False)
         self._write_catalogue_workbook(output_files["catalogue_xlsx"], generated, analyses, matches, evidence, anomalies)
         analysis_catalogue.to_csv(output_files["focus_catalogue_csv"], index=False)
         analysis_catalogue.to_excel(output_files["focus_catalogue_xlsx"], index=False)
@@ -190,6 +193,20 @@ class DemoRunner:
             "Extracted handle": analysis.fields.get("Handle", ""),
             "Extracted fitting": analysis.fields.get("Fitting", ""),
             "Extracted accuracy class": analysis.fields.get("Accuracy class", ""),
+            "Extracted protection degree": analysis.fields.get("Protection degree", ""),
+            "Extracted electrical rating": analysis.fields.get("Electrical rating", ""),
+            "Extracted illumination detail": analysis.fields.get("Illumination detail", ""),
+            "Extracted air quality": analysis.fields.get("Compressed air quality", ""),
+            "Extracted case material": analysis.fields.get("Case material", ""),
+            "Extracted frame ring": analysis.fields.get("Frame ring", ""),
+            "Extracted pointer": analysis.fields.get("Pointer", ""),
+            "Extracted pointer system": analysis.fields.get("Pointer system", ""),
+            "Extracted process connection": analysis.fields.get("Process connection", ""),
+            "Extracted lens": analysis.fields.get("Lens", ""),
+            "Extracted restrictor screw": analysis.fields.get("Restrictor screw", ""),
+            "Extracted safety blow-out": analysis.fields.get("Safety blow-out", ""),
+            "Extracted standards": analysis.fields.get("Standards", ""),
+            "Extracted material finishes": analysis.fields.get("Material finishes", ""),
             "Extracted outlet connection": analysis.fields.get("Outlet connection", ""),
             "Extracted envelope dimensions": analysis.fields.get("Envelope dimensions", ""),
             "Extracted mounting holes": analysis.fields.get("Mounting holes", ""),
@@ -236,8 +253,10 @@ class DemoRunner:
         review_rows = pd.DataFrame([self._analysis_columns(analysis, match_by_pdf.get(analysis.source_pdf.name)) for analysis in analyses])
         technical_rows = self._build_technical_characteristics_frame(analyses)
         technical_summary = self._build_technical_summary_frame(technical_rows)
+        extended_catalogue = self._build_extended_catalogue(generated, analyses)
         self._write_template_catalogue_sheet(path, generated)
         with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+            extended_catalogue.to_excel(writer, sheet_name="Generated Catalogue Extended", index=False)
             pdf_summary.to_excel(writer, sheet_name="PDF Summary", index=False)
             review_rows.to_excel(writer, sheet_name="PDF Row Review", index=False)
             technical_summary.to_excel(writer, sheet_name="Technical Summary", index=False)
@@ -268,6 +287,22 @@ class DemoRunner:
             "Weight",
             "Configuration",
             "Compressor detail",
+            "Protection degree",
+            "Electrical rating",
+            "Illumination detail",
+            "Compressed air quality",
+            "Case material",
+            "Frame ring",
+            "Dial",
+            "Pointer",
+            "Pointer system",
+            "Color coding",
+            "Process connection",
+            "Lens",
+            "Restrictor screw",
+            "Safety blow-out",
+            "Standards",
+            "Material finishes",
         ]
         rows: list[dict[str, Any]] = []
         for analysis in analyses:
@@ -333,6 +368,73 @@ class DemoRunner:
         summary["Average confidence"] = summary["Average confidence"].round(2).fillna("")
         return summary[columns].sort_values(["Source PDF", "Category"])
 
+    def _build_extended_catalogue(self, generated: pd.DataFrame, analyses: list[Any]) -> pd.DataFrame:
+        extra_fields = [
+            "Source PDF",
+            "Drawing number",
+            "Drawing revision",
+            "Drawing title",
+            "Diameter",
+            "Pressure",
+            "Accuracy class",
+            "Working temperature",
+            "Compressed air quality",
+            "Protection degree",
+            "LED",
+            "Electrical rating",
+            "Illumination detail",
+            "Fitting",
+            "Process connection",
+            "Mounting",
+            "Case material",
+            "Frame ring",
+            "Dial",
+            "Pointer",
+            "Pointer system",
+            "Color coding",
+            "Lens",
+            "Restrictor screw",
+            "Safety blow-out",
+            "Material finishes",
+            "Standards",
+        ]
+        category_columns = {
+            "component": "All component details",
+            "connection": "All connection details",
+            "electrical": "All electrical details",
+            "illumination": "All illumination details",
+            "material": "All material details",
+            "media": "All media/air quality details",
+            "protection": "All protection details",
+            "standard": "All standards",
+            "temperature": "All temperature details",
+        }
+        rows: list[dict[str, Any]] = []
+        generated_rows = generated.to_dict("records")
+        for idx, analysis in enumerate(analyses):
+            base = dict(generated_rows[idx]) if idx < len(generated_rows) else {}
+            base["Source PDF"] = analysis.source_pdf.name
+            for field in extra_fields:
+                if field == "Source PDF":
+                    continue
+                base[field] = analysis.fields.get(field, "")
+            category_values: dict[str, list[str]] = {category: [] for category in category_columns}
+            for key, value in analysis.fields.items():
+                if not key.startswith("Technical characteristic|") or not value:
+                    continue
+                _, category, name, _idx = key.split("|", 3)
+                if category not in category_values:
+                    continue
+                labelled = f"{name}: {value}"
+                if labelled not in category_values[category]:
+                    category_values[category].append(labelled)
+            for category, column in category_columns.items():
+                base[column] = "; ".join(category_values[category])
+            rows.append(base)
+        ordered = list(generated.columns) + [field for field in extra_fields if field not in generated.columns]
+        ordered.extend(column for column in category_columns.values() if column not in ordered)
+        return pd.DataFrame(rows, columns=ordered)
+
     def _technical_evidence_lookup(self, analysis: Any) -> dict[tuple[str, str], dict[str, Any]]:
         lookup: dict[tuple[str, str], dict[str, Any]] = {}
         for item in analysis.evidence:
@@ -363,6 +465,22 @@ class DemoRunner:
             "Weight": "weight",
             "Configuration": "configuration",
             "Compressor detail": "configuration",
+            "Protection degree": "protection",
+            "Electrical rating": "electrical",
+            "Illumination detail": "illumination",
+            "Compressed air quality": "media",
+            "Case material": "material",
+            "Frame ring": "material",
+            "Dial": "material",
+            "Pointer": "material",
+            "Pointer system": "component",
+            "Color coding": "component",
+            "Process connection": "connection",
+            "Lens": "component",
+            "Restrictor screw": "component",
+            "Safety blow-out": "component",
+            "Standards": "standard",
+            "Material finishes": "material",
         }
         return categories.get(field, "technical")
 
@@ -401,10 +519,35 @@ class DemoRunner:
         choose = self._existing_or_known if prefer_existing else self._known_or_existing
         product_name = analysis.fields.get("Product Name", "")
         if product_name == "D - MANOMETERS":
-            row["Technical attribute 1"] = choose(row.get("Technical attribute 1"), analysis.fields.get("Diameter")) if prefer_existing else choose(analysis.fields.get("Diameter"), row.get("Technical attribute 1"))
-            row["Technical attribute 2"] = choose(row.get("Technical attribute 2"), analysis.fields.get("LED")) if prefer_existing else choose(analysis.fields.get("LED"), row.get("Technical attribute 2"))
-            row["Technical attribute 3"] = choose(row.get("Technical attribute 3"), analysis.fields.get("Pressure")) if prefer_existing else choose(analysis.fields.get("Pressure"), row.get("Technical attribute 3"))
-            row["Technical attribute 4"] = choose(row.get("Technical attribute 4"), analysis.fields.get("Mounting")) if prefer_existing else choose(analysis.fields.get("Mounting"), row.get("Technical attribute 4"))
+            row["Technical attribute 1"] = self._join_known_limited(
+                analysis.fields.get("Diameter"),
+                analysis.fields.get("Pressure"),
+                analysis.fields.get("Accuracy class"),
+                fallback=row.get("Technical attribute 1"),
+            )
+            row["Technical attribute 2"] = self._join_known_limited(
+                analysis.fields.get("LED"),
+                analysis.fields.get("Electrical rating"),
+                analysis.fields.get("Protection degree"),
+                fallback=row.get("Technical attribute 2"),
+                max_items=5,
+            )
+            row["Technical attribute 3"] = self._join_known_limited(
+                analysis.fields.get("Fitting"),
+                analysis.fields.get("Working temperature") or analysis.fields.get("Temperature"),
+                analysis.fields.get("Compressed air quality"),
+                analysis.fields.get("Process connection"),
+                fallback=row.get("Technical attribute 3"),
+                max_items=5,
+            )
+            row["Technical attribute 4"] = self._join_known_limited(
+                analysis.fields.get("Mounting"),
+                analysis.fields.get("Case material"),
+                analysis.fields.get("Frame ring"),
+                analysis.fields.get("Safety blow-out"),
+                fallback=row.get("Technical attribute 4"),
+                max_items=5,
+            )
             return
         if product_name == "A-BURAN COMPRESSOR":
             row["Technical attribute 1"] = self._first_known(analysis.fields.get("Outlet connection"), analysis.fields.get("Compressor detail"), row.get("Technical attribute 1"))
@@ -493,8 +636,31 @@ class DemoRunner:
         return ""
 
     def _join_known(self, *values: Any, fallback: Any = "") -> str:
-        known = [str(value) for value in values if value and str(value) not in {"UNKNOWN", "NOT_FOUND", "NEEDS REVIEW"}]
+        known = self._unique_known_values(*values)
         return "; ".join(known) if known else (str(fallback) if fallback else "")
+
+    def _join_known_limited(self, *values: Any, fallback: Any = "", max_items: int = 4) -> str:
+        known = self._unique_known_values(*values)
+        if known:
+            return "; ".join(known[:max_items])
+        return str(fallback) if fallback else ""
+
+    def _unique_known_values(self, *values: Any) -> list[str]:
+        known: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if not value or str(value) in {"UNKNOWN", "NOT_FOUND", "NEEDS REVIEW"}:
+                continue
+            for part in str(value).split(";"):
+                cleaned = part.strip()
+                if not cleaned or cleaned in {"UNKNOWN", "NOT_FOUND", "NEEDS REVIEW"}:
+                    continue
+                key = cleaned.lower().replace(" ", "").replace(",", ".")
+                if key in seen:
+                    continue
+                seen.add(key)
+                known.append(cleaned)
+        return known
 
     def _existing_or_known(self, existing: str | None, extracted: str | None) -> str:
         if existing and existing not in {"UNKNOWN", "NOT_FOUND"}:
