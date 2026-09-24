@@ -119,3 +119,23 @@ def test_extended_catalogue_promotes_mined_manometer_characteristics(tmp_path):
     assert "BLOW-OUT 13" in by_part.loc["FT0105784-100", "Technical attribute 11"]
     assert "EN 837-1" in by_part.loc["FT0105784-100", "Technical attribute 12"]
     assert main_by_part.loc["FT0105784-100", "Technical attribute 1"] == "DIAMETER 80"
+
+
+def test_engineering_model_extracts_structured_entities_from_drawings():
+    settings = DemoSettings()
+    analyses = {path.name: PDFAnalyzer().analyze(path) for path in settings.pdf_paths if path.exists()}
+
+    gauge = analyses["1-498149_B03.pdf"].engineering
+    assert gauge is not None
+    assert any(d.dimension_type == "thread" and d.thread_designation == "M16X1.5" for d in gauge.dimensions)
+    assert any(p.name == "Operating temperature" and p.value_min == -50 and p.value_max == 60 for p in gauge.parameters)
+    assert any(s.standard == "DIN EN 837-1" for s in gauge.standards)
+    assert any(m.material == "STAINLESS STEEL" for m in gauge.materials)
+
+    compressor = analyses["FT0127469-100.pdf"].engineering
+    assert compressor is not None
+    assert any(d.nominal_value == 135 and d.upper_tolerance == 0.5 for d in compressor.dimensions)
+    assert any(t.torque and t.unit == "Nm" for t in compressor.torque_requirements)
+    assert compressor.drawing_references
+    assert compressor.revisions
+    assert compressor.inspections[0].has_text_layer

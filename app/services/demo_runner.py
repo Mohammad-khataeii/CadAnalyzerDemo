@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import copy
 import json
 from pathlib import Path
+import re
 from typing import Any, Callable
 
 import pandas as pd
@@ -335,6 +336,7 @@ class DemoRunner:
         rows: list[dict[str, Any]] = []
         for row, analysis in zip(generated.to_dict("records"), analyses):
             enriched = dict(row)
+            engineering_summary = self._engineering_summary(analysis)
             enriched["Technical attribute 5"] = self._join_known_limited(
                 analysis.fields.get("Accuracy class"),
                 analysis.fields.get("Protection degree"),
@@ -353,6 +355,7 @@ class DemoRunner:
             enriched["Technical attribute 8"] = self._join_known_limited(
                 analysis.fields.get("Working temperature") or analysis.fields.get("Temperature"),
                 analysis.fields.get("Compressed air quality"),
+                engineering_summary.get("parameters"),
                 max_items=4,
             )
             enriched["Technical attribute 9"] = self._join_known_limited(
@@ -363,6 +366,7 @@ class DemoRunner:
                 max_items=5,
             )
             enriched["Technical attribute 10"] = self._join_known_limited(
+                engineering_summary.get("dimensions"),
                 analysis.fields.get("Pointer"),
                 analysis.fields.get("Pointer system"),
                 analysis.fields.get("Color coding"),
@@ -372,10 +376,13 @@ class DemoRunner:
                 analysis.fields.get("Lens"),
                 analysis.fields.get("Restrictor screw"),
                 analysis.fields.get("Safety blow-out"),
+                engineering_summary.get("torque_fasteners"),
+                engineering_summary.get("bom"),
                 max_items=4,
             )
             enriched["Technical attribute 12"] = self._join_known_limited(
                 analysis.fields.get("Standards"),
+                engineering_summary.get("revisions_views"),
                 max_items=8,
             )
             rows.append(enriched)
@@ -386,6 +393,41 @@ class DemoRunner:
         for offset, column in enumerate(extra_columns):
             columns.insert(insert_at + offset, column)
         return pd.DataFrame(rows, columns=columns)
+
+    def _engineering_summary(self, analysis: Any) -> dict[str, str]:
+        engineering = getattr(analysis, "engineering", None)
+        if not engineering:
+            return {}
+        dimensions = []
+        for dimension in engineering.dimensions[:8]:
+            if dimension.dimension_type == "thread":
+                dimensions.append(dimension.thread_designation)
+            elif dimension.dimension_type in {"diameter", "radius", "angle", "slot"}:
+                dimensions.append(f"{dimension.dimension_type}: {dimension.value}")
+            elif dimension.upper_tolerance is not None:
+                dimensions.append(f"{dimension.value} {dimension.unit}".strip())
+        parameters = []
+        for parameter in engineering.parameters[:8]:
+            label = parameter.name
+            value = f"{parameter.value} {parameter.unit}".strip()
+            if parameter.tolerance:
+                value = f"{value} {parameter.tolerance}"
+            parameters.append(f"{label}: {value}")
+        torque = [f"{item.reference + ' ' if item.reference else ''}{item.thread + ' ' if item.thread else ''}{item.torque} {item.unit}".strip() for item in engineering.torque_requirements[:5]]
+        fasteners = [connection.raw_text for connection in engineering.connections[:5] if re.search(r"screw|bolt|nut|washer|helicoil|thread", connection.raw_text, re.I)]
+        bom = []
+        if engineering.bom_items:
+            bom.append(f"BOM items: {len(engineering.bom_items)}")
+            bom.extend(item.part_number for item in engineering.bom_items[:4] if item.part_number)
+        revisions = [f"REV {item.revision}: {item.change_type}" for item in engineering.revisions[:5]]
+        views = [f"{item.view_type}: {item.label}" for item in engineering.drawing_views[:5]]
+        return {
+            "dimensions": "; ".join(dict.fromkeys(dimensions)),
+            "parameters": "; ".join(dict.fromkeys(parameters)),
+            "torque_fasteners": "; ".join(dict.fromkeys([*torque, *fasteners])),
+            "bom": "; ".join(dict.fromkeys(bom)),
+            "revisions_views": "; ".join(dict.fromkeys([*revisions, *views])),
+        }
 
     def _technical_evidence_lookup(self, analysis: Any) -> dict[tuple[str, str], dict[str, Any]]:
         lookup: dict[tuple[str, str], dict[str, Any]] = {}
@@ -649,10 +691,43 @@ class DemoRunner:
         for analysis in analyses:
             for ev in analysis.evidence:
                 rows.append(ev.__dict__)
+            rows.extend(self._engineering_evidence_rows(analysis))
             for field, value in analysis.fields.items():
                 if value in {"UNKNOWN", "NOT_FOUND", "NEEDS REVIEW"}:
                     rows.append(Evidence(field, value, analysis.source_pdf.name, 0, "Field not unambiguously available in deterministic extraction.", 0.25, "status_marker", "NEEDS REVIEW").__dict__)
         return pd.DataFrame(rows)
+
+    def _engineering_evidence_rows(self, analysis: Any) -> list[dict[str, Any]]:
+        engineering = getattr(analysis, "engineering", None)
+        if not engineering:
+            return []
+        rows: list[dict[str, Any]] = []
+        entity_specs = [
+            ("Engineering dimension", engineering.dimensions, lambda item: item.value),
+            ("Engineering parameter", engineering.parameters, lambda item: f"{item.name}: {item.value} {item.unit}".strip()),
+            ("Engineering material", engineering.materials, lambda item: item.material),
+            ("Engineering standard", engineering.standards, lambda item: item.standard),
+            ("Engineering BOM item", engineering.bom_items, lambda item: item.part_number or item.description),
+            ("Engineering torque", engineering.torque_requirements, lambda item: f"{item.reference} {item.thread} {item.torque} {item.unit}".strip()),
+            ("Engineering revision", engineering.revisions, lambda item: f"{item.revision}: {item.change_type}"),
+            ("Engineering drawing view", engineering.drawing_views, lambda item: f"{item.view_type}: {item.label}"),
+            ("Engineering connection", engineering.connections, lambda item: item.raw_text),
+        ]
+        for field, items, value_fn in entity_specs:
+            for item in items:
+                source = item.source
+                rows.append(
+                    Evidence(
+                        field,
+                        value_fn(item),
+                        source.source_pdf,
+                        source.page,
+                        source.raw_text,
+                        source.confidence,
+                        source.method,
+                    ).__dict__
+                )
+        return rows
 
     def _write_json(self, path: Path, analyses: list[Any], matches: list[Any], rule_results: dict[str, Any], anomalies: list[dict[str, Any]], clusters: dict[str, Any], similarity: list[dict[str, Any]], bom_summary: dict[str, Any], demo_focus: dict[str, Any]) -> None:
         payload = {
@@ -664,6 +739,7 @@ class DemoRunner:
                     "fields": a.fields,
                     "part_numbers": a.part_numbers,
                     "variants": a.variants,
+                    "engineering": a.engineering.to_dict() if getattr(a, "engineering", None) else {},
                     "warnings": a.warnings,
                 }
                 for a in analyses

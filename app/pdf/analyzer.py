@@ -6,6 +6,7 @@ from typing import Any
 
 import fitz
 
+from app.engineering.extractor import EngineeringDocumentExtractor
 from app.extraction.characteristics import CharacteristicExtractor
 from app.models.domain import PDFDocumentAnalysis
 from app.utils.text import clean_cell, normalize_part_number
@@ -16,12 +17,14 @@ class PDFAnalyzer:
 
     def __init__(self) -> None:
         self.extractor = CharacteristicExtractor()
+        self.engineering_extractor = EngineeringDocumentExtractor()
 
     def analyze(self, path: Path) -> PDFDocumentAnalysis:
         doc = fitz.open(path)
         page_text = {i + 1: doc[i].get_text("text") for i in range(doc.page_count)}
         fields, evidence, part_numbers, variants = self.extractor.extract_fields(path, page_text)
         bom_rows = self._extract_bom_rows(path, page_text)
+        engineering = self.engineering_extractor.extract(path, doc, page_text)
         warnings = []
         if not part_numbers:
             warnings.append("No PartNumber pattern detected.")
@@ -29,6 +32,7 @@ class PDFAnalyzer:
             warnings.append("Drain was not explicitly identified from text.")
         if fields.get("Product Name") == "B - ISOLATING COCKS" and fields.get("Handle") == "NEEDS REVIEW":
             warnings.append("Handle was mentioned but type/colour is variant-specific or unclear.")
+        warnings.extend(engineering.warnings[:20])
         return PDFDocumentAnalysis(
             source_pdf=path,
             page_count=doc.page_count,
@@ -38,6 +42,7 @@ class PDFAnalyzer:
             part_numbers=part_numbers,
             variants=variants,
             bom_rows=bom_rows,
+            engineering=engineering,
             warnings=warnings,
         )
 
