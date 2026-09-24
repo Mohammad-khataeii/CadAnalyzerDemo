@@ -12,6 +12,7 @@ class ExtractionSource:
     method: str
     raw_text: str
     confidence: float
+    bbox: tuple[float, float, float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,18 @@ class BOMItem:
 
 
 @dataclass(frozen=True)
+class EngineeringTable:
+    table_id: str
+    page: int
+    region_type: str
+    row_count: int
+    column_count: int
+    headers: list[str]
+    rows: list[list[str]]
+    source: ExtractionSource
+
+
+@dataclass(frozen=True)
 class TorqueRequirement:
     reference: str
     quantity: str
@@ -129,6 +142,62 @@ class DrawingReference:
 
 
 @dataclass(frozen=True)
+class ComponentRecord:
+    reference: str
+    part_number: str
+    description: str
+    quantity: str
+    material: str
+    source: ExtractionSource
+
+
+@dataclass(frozen=True)
+class AssemblyRecord:
+    name: str
+    assembly_type: str
+    component_refs: list[str]
+    raw_text: str
+    source: ExtractionSource
+
+
+@dataclass(frozen=True)
+class FastenerRecord:
+    reference: str
+    fastener_type: str
+    thread: str
+    quantity: str
+    standard: str
+    raw_text: str
+    source: ExtractionSource
+
+
+@dataclass(frozen=True)
+class VariantRecord:
+    code: str
+    variant_type: str
+    value: str
+    raw_text: str
+    source: ExtractionSource
+
+
+@dataclass(frozen=True)
+class SchematicRecord:
+    label: str
+    function: str
+    connection: str
+    raw_text: str
+    source: ExtractionSource
+
+
+@dataclass(frozen=True)
+class IdentificationRecord:
+    identifier_type: str
+    value: str
+    raw_text: str
+    source: ExtractionSource
+
+
+@dataclass(frozen=True)
 class EngineeringNote:
     category: str
     text: str
@@ -146,22 +215,42 @@ class ConnectionRecord:
     source: ExtractionSource
 
 
+@dataclass(frozen=True)
+class RawExtraction:
+    page: int
+    region_type: str
+    method: str
+    text: str
+    confidence: float
+    bbox: tuple[float, float, float, float] | None = None
+
+
 @dataclass
 class EngineeringDocument:
     source_pdf: str
     page_count: int
+    ocr_available: bool = False
+    ocr_used: bool = False
     inspections: list[PageInspection] = field(default_factory=list)
     dimensions: list[Dimension] = field(default_factory=list)
     parameters: list[TechnicalParameter] = field(default_factory=list)
     materials: list[MaterialRecord] = field(default_factory=list)
     standards: list[StandardRecord] = field(default_factory=list)
     bom_items: list[BOMItem] = field(default_factory=list)
+    tables: list[EngineeringTable] = field(default_factory=list)
     torque_requirements: list[TorqueRequirement] = field(default_factory=list)
     revisions: list[RevisionEvent] = field(default_factory=list)
     drawing_views: list[DrawingView] = field(default_factory=list)
     drawing_references: list[DrawingReference] = field(default_factory=list)
+    components: list[ComponentRecord] = field(default_factory=list)
+    assemblies: list[AssemblyRecord] = field(default_factory=list)
+    fasteners: list[FastenerRecord] = field(default_factory=list)
+    variants: list[VariantRecord] = field(default_factory=list)
+    schematics: list[SchematicRecord] = field(default_factory=list)
+    identifications: list[IdentificationRecord] = field(default_factory=list)
     notes: list[EngineeringNote] = field(default_factory=list)
     connections: list[ConnectionRecord] = field(default_factory=list)
+    raw_data: list[RawExtraction] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     def counts(self) -> dict[str, int]:
@@ -172,18 +261,28 @@ class EngineeringDocument:
             "materials": len(self.materials),
             "standards": len(self.standards),
             "bom_items": len(self.bom_items),
+            "tables": len(self.tables),
             "torque_requirements": len(self.torque_requirements),
             "revisions": len(self.revisions),
             "drawing_views": len(self.drawing_views),
             "drawing_references": len(self.drawing_references),
+            "components": len(self.components),
+            "assemblies": len(self.assemblies),
+            "fasteners": len(self.fasteners),
+            "variants": len(self.variants),
+            "schematics": len(self.schematics),
+            "identifications": len(self.identifications),
             "notes": len(self.notes),
             "connections": len(self.connections),
+            "raw_data": len(self.raw_data),
             "warnings": len(self.warnings),
         }
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "source_pdf": self.source_pdf,
+            "ocr_available": self.ocr_available,
+            "ocr_used": self.ocr_used,
             "counts": self.counts(),
             "warnings": self.warnings,
         }

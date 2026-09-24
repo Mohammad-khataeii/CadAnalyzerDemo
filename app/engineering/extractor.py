@@ -1,27 +1,35 @@
 from __future__ import annotations
 
-from collections import defaultdict
 import re
+import shutil
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import fitz
 
 from app.engineering.model import (
+    AssemblyRecord,
     BOMItem,
+    ComponentRecord,
     ConnectionRecord,
     Dimension,
     DrawingReference,
     DrawingView,
     EngineeringDocument,
     EngineeringNote,
+    EngineeringTable,
     ExtractionSource,
+    FastenerRecord,
+    IdentificationRecord,
     MaterialRecord,
     PageInspection,
+    RawExtraction,
     RevisionEvent,
+    SchematicRecord,
     StandardRecord,
     TechnicalParameter,
     TorqueRequirement,
+    VariantRecord,
 )
 from app.utils.text import clean_cell, normalize_part_number
 
@@ -61,29 +69,156 @@ class EngineeringDocumentExtractor:
         "W",
     )
 
+    part_number_pattern = re.compile(r"FT\d{7}-\d{3}|\b\d/\d{6}\b|\b\d{3}\s?\d{3}\s?\d{2}\s?\d{2}\b", re.I)
+    revision_pattern = re.compile(r"\b(?:REV(?:ISION)?\.?\s*)?([A-Z]\d{2}|[A-Z]{2}\d{2}|L\d{2}|[A-Z]{1,2})\b", re.I)
+
+    def __init__(self) -> None:
+        self._current_bboxes: dict[str, tuple[float, float, float, float]] = {}
+        self._current_bbox_items: list[tuple[str, tuple[float, float, float, float]]] = []
+        self._ocr_available = self._detect_ocr()
+
     def extract(self, path: Path, doc: fitz.Document, page_text: dict[int, str]) -> EngineeringDocument:
-        engineering = EngineeringDocument(source_pdf=path.name, page_count=doc.page_count)
+        engineering = EngineeringDocument(source_pdf=path.name, page_count=doc.page_count, ocr_available=self._ocr_available)
         page_lines = {page: [clean_cell(line) for line in text.splitlines() if clean_cell(line)] for page, text in page_text.items()}
         for page_number in range(1, doc.page_count + 1):
             page = doc[page_number - 1]
             text = page_text.get(page_number, "")
             inspection = self._inspect_page(page_number, page, text)
             engineering.inspections.append(inspection)
+            text_items = self._text_items(page)
+            self._set_current_bboxes(text_items)
             lines = page_lines.get(page_number, [])
+            ocr_lines = self._ocr_lines(path.name, page_number, page, inspection)
+            if ocr_lines:
+                engineering.ocr_used = True
+                lines = [*lines, *ocr_lines]
+            engineering.raw_data.extend(self._raw_extractions(page_number, lines, text_items, bool(ocr_lines)))
+            if self._table_candidate(lines):
+                engineering.tables.extend(self._tables(path.name, page_number, page))
             engineering.dimensions.extend(self._dimensions(path.name, page_number, lines))
             engineering.parameters.extend(self._parameters(path.name, page_number, lines))
             engineering.materials.extend(self._materials(path.name, page_number, lines))
             engineering.standards.extend(self._standards(path.name, page_number, lines))
             engineering.bom_items.extend(self._bom_items(path.name, page_number, lines))
+            engineering.bom_items.extend(self._bom_from_tables(path.name, engineering.tables, page_number))
             engineering.torque_requirements.extend(self._torque(path.name, page_number, lines))
             engineering.revisions.extend(self._revisions(path.name, page_number, lines))
             engineering.drawing_views.extend(self._views(path.name, page_number, lines))
             engineering.drawing_references.extend(self._references(path.name, page_number, lines))
+            engineering.drawing_references.extend(self._visual_references(path.name, page_number, text_items))
+            engineering.components.extend(self._components(path.name, page_number, lines))
+            engineering.assemblies.extend(self._assemblies(path.name, page_number, lines))
+            engineering.fasteners.extend(self._fasteners(path.name, page_number, lines))
+            engineering.variants.extend(self._variants(path.name, page_number, lines))
+            engineering.schematics.extend(self._schematics(path.name, page_number, lines))
+            engineering.identifications.extend(self._identifications(path.name, page_number, lines))
             engineering.notes.extend(self._notes(path.name, page_number, lines))
             engineering.connections.extend(self._connections(path.name, page_number, lines))
         self._dedupe(engineering)
         engineering.warnings.extend(self._validate(engineering))
         return engineering
+
+    def _detect_ocr(self) -> bool:
+        if not shutil.which("tesseract"):
+            return False
+        try:
+            import pytesseract  # noqa: F401
+            from PIL import Image  # noqa: F401
+        except Exception:
+            return False
+        return True
+
+    def _text_items(self, page: fitz.Page) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        try:
+            raw = page.get_text("dict")
+        except Exception:
+            return items
+        for block in raw.get("blocks", []):
+            if block.get("type", 0) != 0:
+                continue
+            for line in block.get("lines", []):
+                text = self._compact(" ".join(span.get("text", "") for span in line.get("spans", [])))
+                if not text:
+                    continue
+                items.append({"text": text, "bbox": self._bbox_tuple(line.get("bbox"))})
+        return items
+
+    def _set_current_bboxes(self, text_items: list[dict[str, Any]]) -> None:
+        self._current_bboxes = {}
+        self._current_bbox_items = []
+        for item in text_items:
+            text = str(item.get("text", ""))
+            bbox = item.get("bbox")
+            if not text or not bbox:
+                continue
+            self._current_bboxes.setdefault(text, bbox)
+            self._current_bbox_items.append((text, bbox))
+
+    def _raw_extractions(self, page: int, lines: list[str], text_items: list[dict[str, Any]], ocr_used: bool) -> list[RawExtraction]:
+        rows: list[RawExtraction] = []
+        for item in text_items:
+            text = self._compact(str(item.get("text", "")))
+            if text:
+                rows.append(RawExtraction(page, "text_line", "NATIVE_LAYOUT", text[:1200], 0.9, item.get("bbox")))
+        if ocr_used:
+            for line in lines[-50:]:
+                rows.append(RawExtraction(page, "ocr_text_line", "OCR", line[:1200], 0.55, None))
+        return rows
+
+    def _ocr_lines(self, pdf: str, page_number: int, page: fitz.Page, inspection: PageInspection) -> list[str]:
+        if not inspection.scanned_likely or not self._ocr_available:
+            return []
+        try:
+            import pytesseract
+            from PIL import Image
+
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            text = pytesseract.image_to_string(image, config="--psm 6")
+        except Exception:
+            return []
+        return [clean_cell(line) for line in text.splitlines() if clean_cell(line)]
+
+    def _tables(self, pdf: str, page_number: int, page: fitz.Page) -> list[EngineeringTable]:
+        if not hasattr(page, "find_tables"):
+            return []
+        tables: list[EngineeringTable] = []
+        try:
+            found = page.find_tables()
+        except Exception:
+            return tables
+        for index, table in enumerate(getattr(found, "tables", []) or [], start=1):
+            try:
+                extracted = [[self._compact(str(cell or "")) for cell in row] for row in (table.extract() or [])]
+            except Exception:
+                continue
+            extracted = [row for row in extracted if any(row)]
+            if not extracted:
+                continue
+            headers = extracted[0]
+            body = extracted[1:] if len(extracted) > 1 else []
+            bbox = self._bbox_tuple(getattr(table, "bbox", None))
+            raw = " | ".join(" ; ".join(row) for row in extracted[:10])
+            tables.append(
+                EngineeringTable(
+                    f"T{page_number}-{index}",
+                    page_number,
+                    self._table_region_type(extracted),
+                    len(body),
+                    max(len(row) for row in extracted),
+                    headers,
+                    body,
+                    self._source(pdf, page_number, "table", "PDF_TABLE", raw, 0.7, bbox),
+                )
+            )
+        return tables
+
+    def _table_candidate(self, lines: list[str]) -> bool:
+        text = "\n".join(lines)
+        if re.search(r"\b(pos|item|ref|qty|q\.ty|quantity|material|designation|description|revision|torque|Nm)\b", text, re.I):
+            return True
+        return len(self.part_number_pattern.findall(text)) >= 2
 
     def _inspect_page(self, page_number: int, page: fitz.Page, text: str) -> PageInspection:
         rect = page.rect
@@ -296,6 +431,103 @@ class EngineeringDocumentExtractor:
                 function = "inlet" if re.search(r"inlet|entrata|einlass", line, re.I) else "outlet" if re.search(r"outlet|uscita", line, re.I) else "connection"
                 yield ConnectionRecord(function, thread_type, size, pitch, self._first_standard(line), line, self._source(pdf, page, "connection", "NATIVE_TEXT", line, 0.74))
 
+    def _bom_from_tables(self, pdf: str, tables: list[EngineeringTable], page: int) -> Iterable[BOMItem]:
+        for table in tables:
+            if table.page != page or table.region_type not in {"bom_table", "parts_table", "generic_table"}:
+                continue
+            headers = [header.lower() for header in table.headers]
+            for row in table.rows:
+                raw = " | ".join(row)
+                if not raw:
+                    continue
+                part_match = self.part_number_pattern.search(raw)
+                ref = self._table_value(row, headers, "pos", "item", "ref", "reference") or self._near_ref(row)
+                qty = self._table_value(row, headers, "qty", "q.ty", "quantity", "q.b.") or self._near_qty(row)
+                description = self._table_value(row, headers, "description", "denomination", "descrizione", "designation") or self._near_description(row)
+                material = self._table_value(row, headers, "material", "mat") or next((m.group(0).upper() for m in self.material_pattern.finditer(raw)), "")
+                part_number = normalize_part_number(part_match.group(0)) if part_match else ""
+                if not any([part_number, ref, qty, description, material]):
+                    continue
+                yield BOMItem(ref, part_number, qty, description, material, self._first_standard(raw), raw, self._source(pdf, page, "bom_table", "PDF_TABLE", raw, 0.72, table.source.bbox))
+
+    def _visual_references(self, pdf: str, page: int, text_items: list[dict[str, Any]]) -> Iterable[DrawingReference]:
+        for item in text_items:
+            text = self._compact(str(item.get("text", "")))
+            if not re.fullmatch(r"\d{1,3}|[A-Z]\d{2,3}", text):
+                continue
+            if self._is_administrative(text):
+                continue
+            bbox = item.get("bbox")
+            confidence = 0.52 if text.isdigit() else 0.48
+            yield DrawingReference(text.upper(), "", confidence, text, self._source(pdf, page, "drawing_balloon", "NATIVE_LAYOUT", text, confidence, bbox))
+
+    def _components(self, pdf: str, page: int, lines: list[str]) -> Iterable[ComponentRecord]:
+        for bom in self._bom_items(pdf, page, lines):
+            yield ComponentRecord(bom.reference, bom.part_number, bom.description, bom.quantity, bom.material, bom.source)
+        for line in lines:
+            if not re.search(r"assembly|compressor|gauge|manometer|valve|cock|body|piston|cylinder|shaft|motor|cooler|fan|bracket|flange|cover|tube|switch", line, re.I):
+                continue
+            part_match = self.part_number_pattern.search(line)
+            ref = self._near_ref([line])
+            description = self._near_description([line]) or line
+            yield ComponentRecord(ref, normalize_part_number(part_match.group(0)) if part_match else "", description[:180], self._near_qty([line]), "", self._source(pdf, page, "component", "NATIVE_TEXT", line, 0.56))
+
+    def _assemblies(self, pdf: str, page: int, lines: list[str]) -> Iterable[AssemblyRecord]:
+        for line in lines:
+            if not re.search(r"assembly|assy|assemblato|gruppo|unit|compressor|manometer|pressure gauge", line, re.I):
+                continue
+            refs = re.findall(r"\b(?:REF\.?|POS\.?|ITEM)\s*[:#-]?\s*([A-Z]?\d{1,3})\b", line, re.I)
+            assembly_type = "compressor" if re.search(r"compressor", line, re.I) else "gauge" if re.search(r"gauge|manometer", line, re.I) else "assembly"
+            yield AssemblyRecord(self._near_description([line]) or line[:80], assembly_type, [ref.upper() for ref in refs], line, self._source(pdf, page, "assembly", "NATIVE_TEXT", line, 0.6))
+
+    def _fasteners(self, pdf: str, page: int, lines: list[str]) -> Iterable[FastenerRecord]:
+        for line in lines:
+            if not re.search(r"screw|bolt|nut|washer|helicoil|stud|vite|rondella|dado|fastener|class\s+[0-9A-Z.]+", line, re.I):
+                continue
+            fastener_type = self._first(r"screw|bolt|nut|washer|helicoil|stud|vite|rondella|dado", line).lower()
+            thread = self._first_thread(line)
+            ref = self._near_ref([line])
+            qty = self._near_qty([line])
+            yield FastenerRecord(ref, fastener_type or "fastener", thread, qty, self._first_standard(line), line, self._source(pdf, page, "fastener", "NATIVE_TEXT", line, 0.66))
+
+    def _variants(self, pdf: str, page: int, lines: list[str]) -> Iterable[VariantRecord]:
+        for line in lines:
+            for match in self.part_number_pattern.finditer(line):
+                code = normalize_part_number(match.group(0))
+                yield VariantRecord(code, "part_number", code, line, self._source(pdf, page, "variant_code", "NATIVE_TEXT", line, 0.7))
+            if re.search(r"optional|variant|version|configuration|without|with |left|right|flanged|threaded", line, re.I):
+                value = self._compact(line)[:180]
+                yield VariantRecord("", "configuration", value, line, self._source(pdf, page, "variant_note", "NATIVE_TEXT", line, 0.55))
+
+    def _schematics(self, pdf: str, page: int, lines: list[str]) -> Iterable[SchematicRecord]:
+        terms = {
+            "inlet": r"\b(?:air\s+)?inlet|entrata|suction\b",
+            "outlet": r"\b(?:air\s+)?outlet|uscita|delivery\b",
+            "drain": r"\bdrain|scarico\b",
+            "cooling": r"\binter-?cooler|after-?cooler|cooling\b",
+            "safety": r"\brelief valve|safety valve|blow[- ]?out\b",
+            "filtering": r"\bfilter|water separator|separator\b",
+            "gauge": r"\bmanometer|pressure gauge|gauge\b",
+        }
+        for line in lines:
+            for function, pattern in terms.items():
+                if not re.search(pattern, line, re.I):
+                    continue
+                connection = self._first_thread(line)
+                label = self._first(pattern, line) or function
+                yield SchematicRecord(label.upper(), function, connection, line, self._source(pdf, page, "schematic_label", "NATIVE_TEXT", line, 0.62))
+
+    def _identifications(self, pdf: str, page: int, lines: list[str]) -> Iterable[IdentificationRecord]:
+        for line in lines:
+            for match in self.part_number_pattern.finditer(line):
+                yield IdentificationRecord("part_number", normalize_part_number(match.group(0)), line, self._source(pdf, page, "identification", "NATIVE_TEXT", line, 0.75))
+            title_match = re.search(r"\b(?:title|main title)\b[:\s-]*(.+)$", line, re.I)
+            if title_match:
+                yield IdentificationRecord("drawing_title", self._compact(title_match.group(1))[:180], line, self._source(pdf, page, "identification", "NATIVE_TEXT", line, 0.58))
+            rev_match = re.search(r"\b(?:rev(?:ision)?\.?|index)\s*[:#-]?\s*([A-Z]\d{2}|[A-Z]{1,2}\d{0,2}|L\d{2})\b", line, re.I)
+            if rev_match:
+                yield IdentificationRecord("revision", rev_match.group(1).upper(), line, self._source(pdf, page, "identification", "NATIVE_TEXT", line, 0.58))
+
     def _dedupe(self, engineering: EngineeringDocument) -> None:
         for attr, key_fn in {
             "dimensions": lambda item: (item.dimension_type, item.value, item.source.page),
@@ -303,12 +535,20 @@ class EngineeringDocumentExtractor:
             "materials": lambda item: (item.material, item.source.page),
             "standards": lambda item: (item.standard, item.source.page),
             "bom_items": lambda item: (item.part_number, item.reference),
+            "tables": lambda item: (item.table_id, item.source.page),
             "torque_requirements": lambda item: (item.reference, item.thread, item.torque),
             "revisions": lambda item: (item.revision, item.description),
             "drawing_views": lambda item: (item.label, item.view_type, item.source.page),
             "drawing_references": lambda item: (item.reference, item.source.page),
+            "components": lambda item: (item.reference, item.part_number, item.description, item.source.page),
+            "assemblies": lambda item: (item.name, item.assembly_type, item.source.page),
+            "fasteners": lambda item: (item.reference, item.fastener_type, item.thread, item.raw_text),
+            "variants": lambda item: (item.code, item.variant_type, item.value, item.source.page),
+            "schematics": lambda item: (item.label, item.function, item.source.page),
+            "identifications": lambda item: (item.identifier_type, item.value, item.source.page),
             "notes": lambda item: (item.category, item.text),
             "connections": lambda item: (item.function, item.thread_size, item.pitch, item.source.page),
+            "raw_data": lambda item: (item.page, item.method, item.text),
         }.items():
             seen = {}
             for item in getattr(engineering, attr):
@@ -318,7 +558,12 @@ class EngineeringDocumentExtractor:
     def _validate(self, engineering: EngineeringDocument) -> list[str]:
         warnings: list[str] = []
         if any(page.scanned_likely for page in engineering.inspections):
-            warnings.append("One or more pages look scanned; OCR fallback is recommended for production use.")
+            if engineering.ocr_available and not engineering.ocr_used:
+                warnings.append("One or more pages look scanned; OCR fallback was available but no OCR text was produced.")
+            elif not engineering.ocr_available:
+                warnings.append("One or more pages look scanned; OCR fallback requires Tesseract/pytesseract on this machine.")
+            else:
+                warnings.append("One or more pages look scanned; OCR fallback was used for low-text pages.")
         bom_refs = {item.reference for item in engineering.bom_items if item.reference}
         drawing_refs = {item.reference for item in engineering.drawing_references if item.reference}
         for ref in sorted(drawing_refs - bom_refs)[:20]:
@@ -333,8 +578,33 @@ class EngineeringDocumentExtractor:
                 warnings.append(f"Dimension {dimension.value} has no unit.")
         return warnings[:100]
 
-    def _source(self, pdf: str, page: int, region: str, method: str, raw: str, confidence: float) -> ExtractionSource:
-        return ExtractionSource(pdf, page, region, method, self._compact(raw)[:700], confidence)
+    def _source(
+        self,
+        pdf: str,
+        page: int,
+        region: str,
+        method: str,
+        raw: str,
+        confidence: float,
+        bbox: tuple[float, float, float, float] | None = None,
+    ) -> ExtractionSource:
+        compact = self._compact(raw)[:700]
+        return ExtractionSource(pdf, page, region, method, compact, confidence, bbox or self._bbox_for_text(compact))
+
+    def _bbox_tuple(self, bbox: Any) -> tuple[float, float, float, float] | None:
+        if not bbox or len(bbox) != 4:
+            return None
+        return tuple(round(float(value), 2) for value in bbox)  # type: ignore[return-value]
+
+    def _bbox_for_text(self, text: str) -> tuple[float, float, float, float] | None:
+        if not text:
+            return None
+        if text in self._current_bboxes:
+            return self._current_bboxes[text]
+        for candidate, bbox in self._current_bbox_items:
+            if text in candidate or candidate in text:
+                return bbox
+        return None
 
     def _dimension_context(self, line: str) -> bool:
         return bool(
@@ -409,6 +679,28 @@ class EngineeringDocumentExtractor:
         for token in window:
             if re.search(r"assembly|compressor|gauge|cock|valve|piston|cylinder|shaft|flange|screw|bolt|washer|ring|body|tube|motor|cooler|fan|seal|joint", token, re.I):
                 return token
+        return ""
+
+    def _table_region_type(self, rows: list[list[str]]) -> str:
+        text = " | ".join(" ; ".join(row) for row in rows[:8])
+        if re.search(r"\b(pos|item|ref|qty|q\.ty|quantity|part|material|description|designation)\b", text, re.I):
+            return "bom_table"
+        if re.search(r"\b(rev|revision|change|date|description)\b", text, re.I):
+            return "revision_table"
+        if re.search(r"\b(torque|Nm|thread|class)\b", text, re.I):
+            return "torque_table"
+        return "generic_table"
+
+    def _table_value(self, row: list[str], headers: list[str], *keys: str) -> str:
+        if not headers:
+            return ""
+        for index, header in enumerate(headers):
+            if index >= len(row):
+                continue
+            normalized = re.sub(r"[^a-z0-9.]+", "", header.lower())
+            for key in keys:
+                if re.sub(r"[^a-z0-9.]+", "", key.lower()) in normalized:
+                    return row[index]
         return ""
 
     def _first_standard(self, text: str) -> str:

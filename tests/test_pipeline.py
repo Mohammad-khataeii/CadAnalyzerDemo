@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pandas as pd
+from openpyxl import load_workbook
 
 from app.catalogue.loader import CatalogueLoader
 from app.catalogue.matcher import CatalogueMatcher
@@ -61,7 +62,23 @@ def test_demo_exports(tmp_path):
     assert progress[-1][0] == 100
     assert [p for p, _ in progress] == sorted(p for p, _ in progress)
     workbook = pd.ExcelFile(result.output_files["catalogue_xlsx"])
-    assert workbook.sheet_names == ["BRAKES_LEAN-CATALOGUE V2_TECH"]
+    assert workbook.sheet_names[0] == "BRAKES_LEAN-CATALOGUE V2_TECH"
+    for expected_sheet in {
+        "SUMMARY",
+        "PRODUCT CATALOGUE",
+        "DIMENSIONS",
+        "TECHNICAL PARAMETERS",
+        "BOM",
+        "TORQUE & FASTENERS",
+        "REVISION HISTORY",
+        "EXTRACTION SOURCES",
+        "QUALITY REVIEW",
+        "RAW DATA",
+    }:
+        assert expected_sheet in workbook.sheet_names
+    styled_workbook = load_workbook(result.output_files["catalogue_xlsx"], read_only=False)
+    assert styled_workbook["DIMENSIONS"].tables
+    assert styled_workbook["DIMENSIONS"].freeze_panes == "A5"
 
 
 def test_generated_catalogue_keeps_template_structure_and_pdf_codes(tmp_path):
@@ -138,4 +155,6 @@ def test_engineering_model_extracts_structured_entities_from_drawings():
     assert any(t.torque and t.unit == "Nm" for t in compressor.torque_requirements)
     assert compressor.drawing_references
     assert compressor.revisions
+    assert compressor.raw_data
+    assert any(source.source.bbox for source in compressor.dimensions if source.source.method.startswith("NATIVE"))
     assert compressor.inspections[0].has_text_layer

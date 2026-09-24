@@ -8,6 +8,11 @@ from typing import Any, Callable
 
 import pandas as pd
 from openpyxl import load_workbook
+from openpyxl.chart import BarChart, Reference
+from openpyxl.formatting.rule import ColorScaleRule
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.utils import get_column_letter
 
 from app.anomalies.detector import AnomalyDetector
 from app.bom.analyzer import BOMAnalyzer
@@ -229,6 +234,383 @@ class DemoRunner:
     def _write_catalogue_workbook(self, path: Path, generated: pd.DataFrame, analyses: list[Any], matches: list[Any], evidence: pd.DataFrame, anomalies: list[dict[str, Any]]) -> None:
         client_catalogue = self._build_client_catalogue(generated, analyses)
         self._write_template_catalogue_sheet(path, client_catalogue)
+        wb = load_workbook(path)
+        frames = self._engineering_workbook_frames(client_catalogue, analyses, matches, evidence, anomalies)
+        for name in frames:
+            if name in wb.sheetnames:
+                del wb[name]
+        for sheet_name, frame in frames.items():
+            ws = wb.create_sheet(sheet_name)
+            if sheet_name == "SUMMARY":
+                self._write_summary_sheet(ws, frame)
+            else:
+                self._write_dataframe_sheet(ws, sheet_name, frame)
+        wb.save(path)
+
+    def _engineering_workbook_frames(self, client_catalogue: pd.DataFrame, analyses: list[Any], matches: list[Any], evidence: pd.DataFrame, anomalies: list[dict[str, Any]]) -> dict[str, pd.DataFrame]:
+        return {
+            "SUMMARY": self._summary_frame(analyses, evidence, anomalies),
+            "PRODUCT CATALOGUE": client_catalogue,
+            "PRODUCTS": self._products_frame(analyses, matches),
+            "VARIANTS": self._variants_frame(analyses),
+            "BOM": self._bom_frame(analyses),
+            "COMPONENTS": self._components_frame(analyses),
+            "DIMENSIONS": self._dimensions_frame(analyses),
+            "TECHNICAL PARAMETERS": self._parameters_frame(analyses),
+            "MATERIALS": self._materials_frame(analyses),
+            "STANDARDS": self._standards_frame(analyses),
+            "TORQUE & FASTENERS": self._torque_fasteners_frame(analyses),
+            "ASSEMBLIES": self._assemblies_frame(analyses),
+            "DRAWING VIEWS": self._views_frame(analyses),
+            "DRAWING REFERENCES": self._references_frame(analyses),
+            "CONNECTIONS": self._connections_frame(analyses),
+            "SCHEMATICS": self._schematics_frame(analyses),
+            "NOTES & INSTRUCTIONS": self._notes_frame(analyses),
+            "REVISION HISTORY": self._revisions_frame(analyses),
+            "IDENTIFICATION": self._identification_frame(analyses),
+            "EXTRACTION SOURCES": self._sources_frame(analyses),
+            "QUALITY REVIEW": self._quality_frame(analyses, anomalies),
+            "RAW DATA": self._raw_data_frame(analyses),
+        }
+
+    def _summary_frame(self, analyses: list[Any], evidence: pd.DataFrame, anomalies: list[dict[str, Any]]) -> pd.DataFrame:
+        rows: list[dict[str, Any]] = []
+        totals: dict[str, int] = {
+            "PDF drawings analyzed": len(analyses),
+            "Pages processed": sum(analysis.page_count for analysis in analyses),
+            "Products": len(analyses),
+            "Evidence rows": len(evidence),
+            "Warnings / review notes": sum(len(analysis.warnings) for analysis in analyses),
+            "Anomalies": len(anomalies),
+        }
+        engineering_keys = [
+            "dimensions",
+            "parameters",
+            "materials",
+            "standards",
+            "bom_items",
+            "tables",
+            "torque_requirements",
+            "revisions",
+            "drawing_views",
+            "drawing_references",
+            "components",
+            "assemblies",
+            "fasteners",
+            "variants",
+            "schematics",
+            "identifications",
+            "notes",
+            "connections",
+        ]
+        for key in engineering_keys:
+            totals[key.replace("_", " ").title()] = sum(getattr(getattr(analysis, "engineering", None), "counts", lambda: {})().get(key, 0) for analysis in analyses)
+        for metric, value in totals.items():
+            rows.append({"Metric": metric, "Value": value, "Meaning": self._summary_meaning(metric)})
+        confidence_values = [source.confidence for analysis in analyses for source in self._engineering_sources(getattr(analysis, "engineering", None))]
+        rows.append({"Metric": "High confidence", "Value": sum(value >= 0.75 for value in confidence_values), "Meaning": "Structured engineering objects extracted with confidence >= 0.75."})
+        rows.append({"Metric": "Medium confidence", "Value": sum(0.55 <= value < 0.75 for value in confidence_values), "Meaning": "Structured engineering objects extracted with confidence between 0.55 and 0.75."})
+        rows.append({"Metric": "Low confidence", "Value": sum(value < 0.55 for value in confidence_values), "Meaning": "Structured engineering objects that should be reviewed manually."})
+        ocr_available = any(getattr(getattr(analysis, "engineering", None), "ocr_available", False) for analysis in analyses)
+        ocr_used = any(getattr(getattr(analysis, "engineering", None), "ocr_used", False) for analysis in analyses)
+        rows.append({"Metric": "OCR available", "Value": "YES" if ocr_available else "NO", "Meaning": "Whether Tesseract/pytesseract can be used for scanned drawings on this machine."})
+        rows.append({"Metric": "OCR used", "Value": "YES" if ocr_used else "NO", "Meaning": "Whether any low-text page was actually analyzed through OCR in this run."})
+        return pd.DataFrame(rows, columns=["Metric", "Value", "Meaning"])
+
+    def _products_frame(self, analyses: list[Any], matches: list[Any]) -> pd.DataFrame:
+        match_by_pdf = {match.source_pdf: match for match in matches}
+        rows = []
+        for analysis in analyses:
+            match = match_by_pdf.get(analysis.source_pdf.name)
+            rows.append(self._analysis_columns(analysis, match))
+        return pd.DataFrame(rows)
+
+    def _variants_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            for variant in analysis.variants:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Variant Source": "base_parser", "Code": variant, "Variant Type": "detected_code", "Value": variant, "Page": "", "Confidence": ""})
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "variants", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Variant Source": item.source.method, "Code": item.code, "Variant Type": item.variant_type, "Value": item.value, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Variant Source", "Code", "Variant Type", "Value", *self._source_headers()])
+
+    def _bom_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            for row in analysis.bom_rows:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Reference": "", "Part Number": row.get("ComponentPartNumber", ""), "Quantity": row.get("Quantity", ""), "Description": row.get("Description", ""), "Material": "", "Standard": row.get("Specification", ""), "Extraction Method": "base_bom_parser", "Page": "", "Confidence": "", "Evidence": row.get("EvidenceText", ""), "BBox X0": "", "BBox Y0": "", "BBox X1": "", "BBox Y1": ""})
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "bom_items", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Reference": item.reference, "Part Number": item.part_number, "Quantity": item.quantity, "Description": item.description, "Material": item.material, "Standard": item.standard, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Reference", "Part Number", "Quantity", "Description", "Material", "Standard", *self._source_headers()])
+
+    def _components_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "components", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Reference": item.reference, "Part Number": item.part_number, "Description": item.description, "Quantity": item.quantity, "Material": item.material, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Reference", "Part Number", "Description", "Quantity", "Material", *self._source_headers()])
+
+    def _dimensions_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "dimensions", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Dimension Type": item.dimension_type, "Value": item.value, "Nominal": item.nominal_value, "Min": item.value_min, "Max": item.value_max, "Upper Tolerance": item.upper_tolerance, "Lower Tolerance": item.lower_tolerance, "Unit": item.unit, "Thread": item.thread_designation, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Dimension Type", "Value", "Nominal", "Min", "Max", "Upper Tolerance", "Lower Tolerance", "Unit", "Thread", *self._source_headers()])
+
+    def _parameters_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "parameters", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Parameter": item.name, "Value": item.value, "Min": item.value_min, "Max": item.value_max, "Unit": item.unit, "Tolerance": item.tolerance, "Qualifier": item.qualifier, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Parameter", "Value", "Min", "Max", "Unit", "Tolerance", "Qualifier", *self._source_headers()])
+
+    def _materials_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "materials", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Material": item.material, "Grade": item.grade, "Standard": item.standard, "Finish": item.finish, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Material", "Grade", "Standard", "Finish", *self._source_headers()])
+
+    def _standards_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "standards", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Standard": item.standard, "Applies To": item.applies_to, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Standard", "Applies To", *self._source_headers()])
+
+    def _torque_fasteners_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "torque_requirements", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Record Type": "torque", "Reference": item.reference, "Fastener Type": "", "Thread": item.thread, "Quantity": item.quantity, "Torque": item.torque, "Unit": item.unit, "Safety Class": item.safety_class, "Standard": "", "Instruction": item.instruction, **self._source_dict(item.source)})
+            for item in getattr(engineering, "fasteners", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Record Type": "fastener", "Reference": item.reference, "Fastener Type": item.fastener_type, "Thread": item.thread, "Quantity": item.quantity, "Torque": "", "Unit": "", "Safety Class": "", "Standard": item.standard, "Instruction": item.raw_text, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Record Type", "Reference", "Fastener Type", "Thread", "Quantity", "Torque", "Unit", "Safety Class", "Standard", "Instruction", *self._source_headers()])
+
+    def _assemblies_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "assemblies", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Assembly Name": item.name, "Assembly Type": item.assembly_type, "Component Refs": "; ".join(item.component_refs), **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Assembly Name", "Assembly Type", "Component Refs", *self._source_headers()])
+
+    def _views_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "drawing_views", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Label": item.label, "View Type": item.view_type, "Scale": item.scale, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Label", "View Type", "Scale", *self._source_headers()])
+
+    def _references_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "drawing_references", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Reference": item.reference, "Related Part Number": item.related_part_number, "Relationship Confidence": item.relationship_confidence, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Reference", "Related Part Number", "Relationship Confidence", *self._source_headers()])
+
+    def _connections_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "connections", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Function": item.function, "Thread Type": item.thread_type, "Thread Size": item.thread_size, "Pitch": item.pitch, "Standard": item.standard, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Function", "Thread Type", "Thread Size", "Pitch", "Standard", *self._source_headers()])
+
+    def _schematics_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "schematics", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Label": item.label, "Function": item.function, "Connection": item.connection, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Label", "Function", "Connection", *self._source_headers()])
+
+    def _notes_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "notes", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Category": item.category, "Text": item.text, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Category", "Text", *self._source_headers()])
+
+    def _revisions_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "revisions", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Revision": item.revision, "Date": item.date, "Change Type": item.change_type, "Affected Reference": item.affected_reference, "Description": item.description, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Revision", "Date", "Change Type", "Affected Reference", "Description", *self._source_headers()])
+
+    def _identification_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            rows.append({"Source PDF": analysis.source_pdf.name, "Identifier Type": "drawing_number", "Value": analysis.fields.get("Drawing number", ""), "Evidence": "", "Page": "", "Extraction Method": "base_parser", "Confidence": "", "BBox X0": "", "BBox Y0": "", "BBox X1": "", "BBox Y1": ""})
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "identifications", []) or []:
+                rows.append({"Source PDF": analysis.source_pdf.name, "Identifier Type": item.identifier_type, "Value": item.value, **self._source_dict(item.source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Identifier Type", "Value", *self._source_headers()])
+
+    def _sources_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            for ev in analysis.evidence:
+                rows.append({"Source PDF": ev.source_pdf, "Entity": ev.field, "Value": ev.value, "Status": ev.status, "Page": ev.page, "Extraction Method": ev.extraction_method, "Confidence": ev.confidence, "Evidence": ev.evidence_text, "BBox X0": "", "BBox Y0": "", "BBox X1": "", "BBox Y1": ""})
+            engineering = getattr(analysis, "engineering", None)
+            for source in self._engineering_sources(engineering):
+                rows.append({"Source PDF": source.source_pdf, "Entity": source.region_type, "Value": source.raw_text[:180], "Status": "ACCEPTED" if source.confidence >= 0.6 else "REVIEW", **self._source_dict(source)})
+        return pd.DataFrame(rows, columns=["Source PDF", "Entity", "Value", "Status", *self._source_headers()])
+
+    def _quality_frame(self, analyses: list[Any], anomalies: list[dict[str, Any]]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            for warning in analysis.warnings:
+                rows.append({"Entity": "Validation", "Type": "warning", "Document": analysis.source_pdf.name, "Page": "", "Value": "", "Confidence": "", "Method": "VALIDATION", "Warning": warning, "Review Required": "YES"})
+            engineering = getattr(analysis, "engineering", None)
+            for source in self._engineering_sources(engineering):
+                if source.confidence < 0.55:
+                    rows.append({"Entity": source.region_type, "Type": "low_confidence", "Document": analysis.source_pdf.name, "Page": source.page, "Value": source.raw_text[:180], "Confidence": source.confidence, "Method": source.method, "Warning": f"Confidence {source.confidence:.2f}", "Review Required": "YES"})
+        for anomaly in anomalies:
+            rows.append({"Entity": "Catalogue anomaly", "Type": anomaly.get("severity", "Anomaly"), "Document": anomaly.get("Source PDF", ""), "Page": "", "Value": "", "Confidence": "", "Method": "ANOMALY", "Warning": anomaly.get("message", str(anomaly)), "Review Required": "YES"})
+        return pd.DataFrame(rows, columns=["Entity", "Type", "Document", "Page", "Value", "Confidence", "Method", "Warning", "Review Required"])
+
+    def _raw_data_frame(self, analyses: list[Any]) -> pd.DataFrame:
+        rows = []
+        for analysis in analyses:
+            engineering = getattr(analysis, "engineering", None)
+            for item in getattr(engineering, "raw_data", []) or []:
+                bbox = item.bbox or ("", "", "", "")
+                width = round(bbox[2] - bbox[0], 2) if all(isinstance(value, (int, float)) for value in bbox) else ""
+                height = round(bbox[3] - bbox[1], 2) if all(isinstance(value, (int, float)) for value in bbox) else ""
+                rows.append({"Source PDF": analysis.source_pdf.name, "Page": item.page, "Region Type": item.region_type, "Method": item.method, "Confidence": item.confidence, "Text": item.text, "BBox X0": bbox[0], "BBox Y0": bbox[1], "BBox X1": bbox[2], "BBox Y1": bbox[3], "BBox Width": width, "BBox Height": height})
+        return pd.DataFrame(rows, columns=["Source PDF", "Page", "Region Type", "Method", "Confidence", "Text", "BBox X0", "BBox Y0", "BBox X1", "BBox Y1", "BBox Width", "BBox Height"])
+
+    def _engineering_sources(self, engineering: Any) -> list[Any]:
+        if not engineering:
+            return []
+        sources = []
+        for attr in ("dimensions", "parameters", "materials", "standards", "bom_items", "tables", "torque_requirements", "revisions", "drawing_views", "drawing_references", "components", "assemblies", "fasteners", "variants", "schematics", "identifications", "notes", "connections"):
+            for item in getattr(engineering, attr, []) or []:
+                source = getattr(item, "source", None)
+                if source:
+                    sources.append(source)
+        return sources
+
+    def _source_headers(self) -> list[str]:
+        return ["Page", "Extraction Method", "Confidence", "Evidence", "BBox X0", "BBox Y0", "BBox X1", "BBox Y1", "BBox Width", "BBox Height"]
+
+    def _source_dict(self, source: Any) -> dict[str, Any]:
+        bbox = source.bbox or ("", "", "", "")
+        width = round(bbox[2] - bbox[0], 2) if all(isinstance(value, (int, float)) for value in bbox) else ""
+        height = round(bbox[3] - bbox[1], 2) if all(isinstance(value, (int, float)) for value in bbox) else ""
+        return {
+            "Page": source.page,
+            "Extraction Method": source.method,
+            "Confidence": source.confidence,
+            "Evidence": source.raw_text,
+            "BBox X0": bbox[0],
+            "BBox Y0": bbox[1],
+            "BBox X1": bbox[2],
+            "BBox Y1": bbox[3],
+            "BBox Width": width,
+            "BBox Height": height,
+        }
+
+    def _summary_meaning(self, metric: str) -> str:
+        meanings = {
+            "PDF drawings analyzed": "Input technical drawings processed in this run.",
+            "Pages processed": "Total PDF pages parsed through the analyzer.",
+            "Products": "Product/drawing records written to the catalogue view.",
+            "Evidence rows": "Traceability rows connecting workbook values to source text.",
+            "Warnings / review notes": "Items that should be manually checked before client release.",
+            "Anomalies": "Detected catalogue consistency or rule issues.",
+            "Dimensions": "Extracted quotas, holes, radii, angles, threads, and toleranced values.",
+            "Parameters": "Pressure, temperature, electrical, performance, weight, and similar technical values.",
+            "Bom Items": "Parts list rows detected from drawing text or PDF table regions.",
+            "Drawing References": "Balloon/item references detected in drawings.",
+        }
+        return meanings.get(metric, "Structured engineering data extracted from the PDFs.")
+
+    def _write_summary_sheet(self, ws: Any, frame: pd.DataFrame) -> None:
+        self._write_dataframe_sheet(ws, "SUMMARY", frame)
+        if frame.empty or "Value" not in frame.columns:
+            return
+        max_row = ws.max_row
+        chart = BarChart()
+        chart.title = "Engineering extraction coverage"
+        chart.y_axis.title = "Count"
+        chart.x_axis.title = "Entity"
+        data = Reference(ws, min_col=2, min_row=4, max_row=min(max_row, 22))
+        cats = Reference(ws, min_col=1, min_row=5, max_row=min(max_row, 22))
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        chart.height = 8
+        chart.width = 18
+        ws.add_chart(chart, "E4")
+
+    def _write_dataframe_sheet(self, ws: Any, title: str, frame: pd.DataFrame) -> None:
+        frame = frame.copy()
+        frame = frame.fillna("")
+        ws.sheet_view.showGridLines = False
+        max_col = max(1, len(frame.columns))
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
+        title_cell = ws.cell(row=1, column=1, value=title)
+        title_cell.fill = PatternFill("solid", fgColor="111827")
+        title_cell.font = Font(color="FFFFFF", bold=True, size=14)
+        title_cell.alignment = Alignment(horizontal="left", vertical="center")
+        ws.row_dimensions[1].height = 26
+        ws.cell(row=2, column=1, value=f"{len(frame)} extracted rows. All values keep page/source provenance where available.")
+        ws.cell(row=2, column=1).font = Font(color="64748B", italic=True)
+        header_row = 4
+        for col_idx, column in enumerate(frame.columns, start=1):
+            cell = ws.cell(row=header_row, column=col_idx, value=column)
+            cell.fill = PatternFill("solid", fgColor="E8EEF7")
+            cell.font = Font(color="111827", bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = Border(bottom=Side(style="thin", color="CBD5E1"))
+        for row_idx, record in enumerate(frame.to_dict("records"), start=header_row + 1):
+            for col_idx, column in enumerate(frame.columns, start=1):
+                value = record.get(column, "")
+                if isinstance(value, (list, tuple, set)):
+                    value = "; ".join(str(item) for item in value)
+                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+                if row_idx % 2 == 0:
+                    cell.fill = PatternFill("solid", fgColor="F8FAFC")
+        ws.freeze_panes = "A5"
+        ws.auto_filter.ref = f"A{header_row}:{get_column_letter(max_col)}{max(header_row, ws.max_row)}"
+        if not frame.empty:
+            table_ref = f"A{header_row}:{get_column_letter(max_col)}{ws.max_row}"
+            table_name = re.sub(r"[^A-Za-z0-9]", "", title.title())[:24] or "Data"
+            table = Table(displayName=f"{table_name}Table", ref=table_ref)
+            table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False, showRowStripes=True, showColumnStripes=False)
+            ws.add_table(table)
+        for col_idx, column in enumerate(frame.columns, start=1):
+            series = [str(column), *(str(value) for value in frame[column].head(150).tolist())] if column in frame.columns else [str(column)]
+            width = min(48, max(10, max(len(value) for value in series[:151]) + 2))
+            if column in {"Evidence", "Text", "Description", "Instruction", "Issue", "Action", "Meaning", "PDF warnings", "Analysis note"}:
+                width = 42
+            ws.column_dimensions[get_column_letter(col_idx)].width = width
+        for row_idx in range(header_row + 1, min(ws.max_row, header_row + 80) + 1):
+            ws.row_dimensions[row_idx].height = 32
+        if "Confidence" in frame.columns and not frame.empty:
+            col_letter = get_column_letter(list(frame.columns).index("Confidence") + 1)
+            ws.conditional_formatting.add(
+                f"{col_letter}{header_row + 1}:{col_letter}{ws.max_row}",
+                ColorScaleRule(start_type="num", start_value=0, start_color="FCA5A5", mid_type="num", mid_value=0.65, mid_color="FDE68A", end_type="num", end_value=1, end_color="86EFAC"),
+            )
+        ws.page_setup.orientation = "landscape"
+        ws.page_setup.fitToWidth = 1
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
 
     def _build_technical_characteristics_frame(self, analyses: list[Any]) -> pd.DataFrame:
         fields = [
@@ -708,9 +1090,18 @@ class DemoRunner:
             ("Engineering material", engineering.materials, lambda item: item.material),
             ("Engineering standard", engineering.standards, lambda item: item.standard),
             ("Engineering BOM item", engineering.bom_items, lambda item: item.part_number or item.description),
+            ("Engineering table", engineering.tables, lambda item: f"{item.table_id}: {item.region_type}"),
             ("Engineering torque", engineering.torque_requirements, lambda item: f"{item.reference} {item.thread} {item.torque} {item.unit}".strip()),
             ("Engineering revision", engineering.revisions, lambda item: f"{item.revision}: {item.change_type}"),
             ("Engineering drawing view", engineering.drawing_views, lambda item: f"{item.view_type}: {item.label}"),
+            ("Engineering drawing reference", engineering.drawing_references, lambda item: item.reference),
+            ("Engineering component", engineering.components, lambda item: item.part_number or item.description),
+            ("Engineering assembly", engineering.assemblies, lambda item: item.name),
+            ("Engineering fastener", engineering.fasteners, lambda item: f"{item.fastener_type} {item.thread}".strip()),
+            ("Engineering variant", engineering.variants, lambda item: item.code or item.value),
+            ("Engineering schematic", engineering.schematics, lambda item: f"{item.function}: {item.label}"),
+            ("Engineering identification", engineering.identifications, lambda item: f"{item.identifier_type}: {item.value}"),
+            ("Engineering note", engineering.notes, lambda item: item.text),
             ("Engineering connection", engineering.connections, lambda item: item.raw_text),
         ]
         for field, items, value_fn in entity_specs:
