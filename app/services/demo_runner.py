@@ -235,10 +235,12 @@ class DemoRunner:
         anomaly_rows = pd.DataFrame(anomalies)
         review_rows = pd.DataFrame([self._analysis_columns(analysis, match_by_pdf.get(analysis.source_pdf.name)) for analysis in analyses])
         technical_rows = self._build_technical_characteristics_frame(analyses)
+        technical_summary = self._build_technical_summary_frame(technical_rows)
         self._write_template_catalogue_sheet(path, generated)
         with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
             pdf_summary.to_excel(writer, sheet_name="PDF Summary", index=False)
             review_rows.to_excel(writer, sheet_name="PDF Row Review", index=False)
+            technical_summary.to_excel(writer, sheet_name="Technical Summary", index=False)
             technical_rows.to_excel(writer, sheet_name="Technical Characteristics", index=False)
             evidence.to_excel(writer, sheet_name="Extraction Evidence", index=False)
             (bom_rows if not bom_rows.empty else pd.DataFrame(columns=["SourcePDF", "ComponentPartNumber", "Quantity", "Description", "Specification", "ABC class", "EvidenceText"])).to_excel(writer, sheet_name="BOM Components", index=False)
@@ -269,21 +271,100 @@ class DemoRunner:
         ]
         rows: list[dict[str, Any]] = []
         for analysis in analyses:
+            evidence_lookup = self._technical_evidence_lookup(analysis)
             for field in fields:
                 value = analysis.fields.get(field, "")
                 if not value or value in {"UNKNOWN", "NOT_FOUND", "NEEDS REVIEW"}:
                     continue
+                evidence = evidence_lookup.get((field, value), {})
                 rows.append(
                     {
                         "Source PDF": analysis.source_pdf.name,
                         "Drawing number": analysis.fields.get("Drawing number", ""),
                         "Product Name": analysis.fields.get("Product Name", ""),
                         "Product Type": analysis.fields.get("Product Type", ""),
+                        "Category": self._technical_category(field),
                         "Characteristic": field,
                         "Mapped value": value,
+                        "Confidence": evidence.get("confidence", ""),
+                        "Evidence": evidence.get("evidence_text", ""),
                     }
                 )
-        return pd.DataFrame(rows, columns=["Source PDF", "Drawing number", "Product Name", "Product Type", "Characteristic", "Mapped value"])
+            for key, value in analysis.fields.items():
+                if not key.startswith("Technical characteristic|") or not value:
+                    continue
+                _, category, name, _idx = key.split("|", 3)
+                evidence = evidence_lookup.get((f"Technical characteristic: {category} / {name}", value), {})
+                rows.append(
+                    {
+                        "Source PDF": analysis.source_pdf.name,
+                        "Drawing number": analysis.fields.get("Drawing number", ""),
+                        "Product Name": analysis.fields.get("Product Name", ""),
+                        "Product Type": analysis.fields.get("Product Type", ""),
+                        "Category": category,
+                        "Characteristic": name,
+                        "Mapped value": value,
+                        "Confidence": evidence.get("confidence", ""),
+                        "Evidence": evidence.get("evidence_text", ""),
+                    }
+                )
+        columns = ["Source PDF", "Drawing number", "Product Name", "Product Type", "Category", "Characteristic", "Mapped value", "Confidence", "Evidence"]
+        frame = pd.DataFrame(rows, columns=columns)
+        if frame.empty:
+            return frame
+        return frame.drop_duplicates(subset=["Source PDF", "Category", "Characteristic", "Mapped value"]).sort_values(["Source PDF", "Category", "Characteristic", "Mapped value"])
+
+    def _build_technical_summary_frame(self, technical_rows: pd.DataFrame) -> pd.DataFrame:
+        columns = ["Source PDF", "Category", "Extracted values", "Average confidence", "Examples"]
+        if technical_rows.empty:
+            return pd.DataFrame(columns=columns)
+        summary = (
+            technical_rows.assign(Confidence=pd.to_numeric(technical_rows["Confidence"], errors="coerce"))
+            .groupby(["Source PDF", "Category"], dropna=False)
+            .agg(
+                **{
+                    "Extracted values": ("Mapped value", "nunique"),
+                    "Average confidence": ("Confidence", "mean"),
+                    "Examples": ("Mapped value", lambda values: "; ".join(str(value) for value in list(values)[:5])),
+                }
+            )
+            .reset_index()
+        )
+        summary["Average confidence"] = summary["Average confidence"].round(2).fillna("")
+        return summary[columns].sort_values(["Source PDF", "Category"])
+
+    def _technical_evidence_lookup(self, analysis: Any) -> dict[tuple[str, str], dict[str, Any]]:
+        lookup: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in analysis.evidence:
+            lookup[(item.field, item.value)] = {
+                "confidence": item.confidence,
+                "evidence_text": item.evidence_text,
+            }
+        return lookup
+
+    def _technical_category(self, field: str) -> str:
+        categories = {
+            "Diameter": "dimension",
+            "LED": "illumination",
+            "Pressure": "pressure",
+            "Mounting": "mounting",
+            "Fitting": "connection",
+            "Accuracy class": "standard",
+            "Earth lug": "connection",
+            "Outlet connection": "connection",
+            "Envelope dimensions": "dimension",
+            "Mounting holes": "connection",
+            "Key slot": "dimension",
+            "Working pressure": "pressure",
+            "Working temperature": "temperature",
+            "Startup temperature": "temperature",
+            "Duty cycle": "performance",
+            "Starts per hour": "performance",
+            "Weight": "weight",
+            "Configuration": "configuration",
+            "Compressor detail": "configuration",
+        }
+        return categories.get(field, "technical")
 
     def _write_template_catalogue_sheet(self, path: Path, generated: pd.DataFrame) -> None:
         wb = load_workbook(self.settings.catalogue_path)
@@ -328,8 +409,14 @@ class DemoRunner:
         if product_name == "A-BURAN COMPRESSOR":
             row["Technical attribute 1"] = self._first_known(analysis.fields.get("Outlet connection"), analysis.fields.get("Compressor detail"), row.get("Technical attribute 1"))
             row["Technical attribute 2"] = self._first_known(analysis.fields.get("Envelope dimensions"), row.get("Technical attribute 2"))
-            row["Technical attribute 3"] = self._join_known(analysis.fields.get("Weight"), analysis.fields.get("Working pressure"), fallback=row.get("Technical attribute 3"))
-            row["Technical attribute 4"] = self._first_known(analysis.fields.get("Mounting holes"), analysis.fields.get("Key slot"), row.get("Technical attribute 4"))
+            row["Technical attribute 3"] = self._join_known(
+                analysis.fields.get("Weight"),
+                analysis.fields.get("Working pressure"),
+                analysis.fields.get("Working temperature"),
+                analysis.fields.get("Duty cycle"),
+                fallback=row.get("Technical attribute 3"),
+            )
+            row["Technical attribute 4"] = self._join_known(analysis.fields.get("Mounting holes"), analysis.fields.get("Key slot"), fallback=row.get("Technical attribute 4"))
             return
         row["Technical attribute 1"] = choose(row.get("Technical attribute 1"), analysis.fields.get("Diameter")) if prefer_existing else choose(analysis.fields.get("Diameter"), row.get("Technical attribute 1"))
         row["Technical attribute 2"] = choose(row.get("Technical attribute 2"), analysis.fields.get("Drain")) if prefer_existing else choose(analysis.fields.get("Drain"), row.get("Technical attribute 2"))

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pandas as pd
+
 from app.catalogue.loader import CatalogueLoader
 from app.catalogue.matcher import CatalogueMatcher
 from app.clustering.engine import ClusteringEngine
@@ -58,6 +60,9 @@ def test_demo_exports(tmp_path):
     assert progress[0][0] == 0
     assert progress[-1][0] == 100
     assert [p for p, _ in progress] == sorted(p for p, _ in progress)
+    workbook = pd.ExcelFile(result.output_files["catalogue_xlsx"])
+    assert "Technical Summary" in workbook.sheet_names
+    assert "Technical Characteristics" in workbook.sheet_names
 
 
 def test_generated_catalogue_keeps_template_structure_and_pdf_codes(tmp_path):
@@ -87,3 +92,16 @@ def test_generated_catalogue_maps_additional_pdf_characteristics(tmp_path):
     assert by_part.loc["FT0127469-100", "Technical attribute 1"] == 'OUTLET 3/4" GAS UNI-ISO 228'
     assert by_part.loc["FT0127469-100", "Technical attribute 2"] == "ENVELOPE 500 x 370 x 265 mm"
     assert "WORKING PRESSURE 11 bar(g)" in by_part.loc["FT0127470-100", "Technical attribute 3"]
+
+
+def test_generated_workbook_contains_aggressive_technical_characteristics(tmp_path):
+    settings = DemoSettings(output_dir=tmp_path)
+    result, _, _ = DemoRunner(settings).run()
+    technical = pd.read_excel(result.output_files["catalogue_xlsx"], sheet_name="Technical Characteristics").fillna("")
+    summary = pd.read_excel(result.output_files["catalogue_xlsx"], sheet_name="Technical Summary").fillna("")
+
+    assert len(technical) >= 150
+    assert {"material", "standard", "electrical", "pressure", "temperature"}.issubset(set(technical["Category"]))
+    assert "STAINLESS STEEL" in set(technical["Mapped value"])
+    assert any(technical["Mapped value"].astype(str).str.contains("IP54|IP 54", regex=True))
+    assert not summary.empty

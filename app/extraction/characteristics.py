@@ -4,11 +4,15 @@ import re
 from pathlib import Path
 
 from app.models.domain import Evidence, NOT_FOUND, UNKNOWN
+from app.extraction.technical_miner import TechnicalCharacteristicMiner
 from app.utils.text import clean_cell, compact_unique, normalize_part_number
 
 
 class CharacteristicExtractor:
     """Deterministic local extraction for drawing metadata and catalogue attributes."""
+
+    def __init__(self) -> None:
+        self.technical_miner = TechnicalCharacteristicMiner()
 
     pn_patterns = [
         r"FT\d{7}-\d{3}",
@@ -104,6 +108,21 @@ class CharacteristicExtractor:
             value = fields.get(field, "")
             if value and value != UNKNOWN:
                 evidence.append(self._ev(field, value, pdf_path, self._page_of(page_text, value), self._evidence_line(full_text, value), 0.82, "technical_characteristic_pattern"))
+
+        for idx, characteristic in enumerate(self.technical_miner.extract(full_text), start=1):
+            field_key = f"Technical characteristic|{characteristic.category}|{characteristic.name}|{idx:03d}"
+            fields[field_key] = characteristic.value
+            evidence.append(
+                self._ev(
+                    f"Technical characteristic: {characteristic.category} / {characteristic.name}",
+                    characteristic.value,
+                    pdf_path,
+                    self._page_of(page_text, characteristic.evidence or characteristic.value),
+                    characteristic.evidence,
+                    characteristic.confidence,
+                    "technical_miner_tfidf",
+                )
+            )
 
         part_numbers = self._extract_part_numbers(full_text)
         variants = self._extract_variants(full_text)
