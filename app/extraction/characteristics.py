@@ -384,7 +384,7 @@ class CharacteristicExtractor:
         return fitting.upper() if fitting else UNKNOWN
 
     def _extract_accuracy_class(self, text: str) -> str:
-        match = re.search(r"(?:ACCURACY\s+)?CLASS\s+(\d[,.]\d+)", text, re.I)
+        match = re.search(r"(?:ACCURACY\s+)?CLASS\s*:?\s*(\d[,.]\d+)", text, re.I)
         if match:
             return f"CLASS {match.group(1).replace(',', '.')}"
         return UNKNOWN

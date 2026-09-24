@@ -37,6 +37,8 @@ class TechnicalOntologyModel:
         "configuration": "configuration standard high humidity variant code reference",
         "protection": "protection ip fire smoke safety class blow out breather",
         "illumination": "illumination led lamp light voltage ba9s terminal",
+        "media": "compressed air quality pneumatic medium fluid iso 8573 filtration dryness oil class",
+        "component": "case ring pointer dial lens restrictor screw label breather connector terminal component",
     }
 
     def __init__(self) -> None:
@@ -83,6 +85,7 @@ class TechnicalCharacteristicMiner:
         candidates.extend(self._dimension_candidates(lines))
         candidates.extend(self._electrical_rows(lines))
         candidates.extend(self._pressure_temperature_rows(lines))
+        candidates.extend(self._component_rows(lines))
 
         return self._dedupe_and_limit(candidates)
 
@@ -102,8 +105,13 @@ class TechnicalCharacteristicMiner:
             ("electrical", "Current consumption", r"CURRENT CONSUMPTION[\s\S]{0,140}?(\d+(?:[,.]\d+)?\s+\d+(?:[,.]\d+)?\s*A\s*±\s*\d+\s*%)", 0.82),
             ("electrical", "Electric power supply", r"ELECTRIC POWER SUPPLY[\s\S]{0,100}?(\d+\s+\d+\s*Vac\s*±\s*\d+\s*%)", 0.82),
             ("protection", "Protection degree", r"(IP\s*54[^\n]*)", 0.82),
+            ("standard", "Accuracy class", r"(?:ACCURACY\s+)?CLASS\s*:?\s*(\d[,.]\d+)(?:\s*\([^)]+\))?", 0.84),
+            ("media", "Compressed air quality", r"(?:COMPRESSED AIR QUALITY|AIR QUALITY ACCEPTED FOR WORKING|LUFTMINDESTQUALITÄT)\s*:?\s*([0-9]-[0-9]-[0-9](?:\s+ISO\s*8573-1)?)", 0.86),
             ("illumination", "Illumination", r"((?:DIRECT\s+)?ILLUMINATION[^\n]*(?:LED|LAMP)[^\n]*)", 0.78),
             ("mounting", "Installation", r"((?:INSTALLATION|INSTALLAZIONE|EINBAU)[^\n]*(?:\d{2}\s*°|VERTICAL|PANEL|U-CLAMP)[^\n]*)", 0.84),
+            ("component", "Safety blow-out", r"((?:SAFETY\s+)?BLOW-?OUT[^\n]*(?:BREATHER|INCORPORATED|\d+)?[^\n]*)", 0.78),
+            ("component", "Restrictor screw", r"((?:RESTRICTOR\s+SCREW|ORIFICE)[^\n]*(?:M\d+|mm)[^\n]*)", 0.78),
+            ("component", "Lens", r"(LENS\s*:\s*[^\n]+)", 0.78),
         ]
         for category, name, pattern, confidence in patterns:
             for match in re.finditer(pattern, text, re.I):
@@ -238,6 +246,30 @@ class TechnicalCharacteristicMiner:
                     category = "temperature" if re.search(r"°?\s*C\b", value, re.I) else "pressure" if "bar" in value.lower() else "performance"
                 yield TechnicalCharacteristic(category, category.title(), value, line, max(0.68, min(0.84, score + 0.45)))
 
+    def _component_rows(self, lines: list[str]) -> Iterable[TechnicalCharacteristic]:
+        patterns = [
+            ("material", "Case", r"CASE\s*\(?1?\)?\s*:\s*(.+)"),
+            ("material", "Frame ring", r"(?:FRAME\s+RING|RING)\s*\(?2?\)?\s*:\s*(.+)"),
+            ("material", "Dial", r"(?:DIAL|INSTRUMENT\s+DIAL|ZIFFERBLATT)\s*:?\s*(.+)"),
+            ("material", "Pointer", r"^\s*-?\s*(?:POINTER(?:\s+COLOR)?|ZEIGERFARBE)\s*:?\s*(.+)"),
+            ("component", "Process connection", r"(?:PROCESS\s+CONNECTION|INLET\s+FITTINGS?|INLET\s+FITTING|EINLASS\s+VERSCHRAUBUNG)\s*\(?3?\)?\s*:?\s*(.+)"),
+            ("component", "Illumination detail", r"(?:DIRECT\s+ILLUMINATION|DIREKTE\s+BELEUCHTUNG|LED\s+LAMP|\bLAMP\b)\s*:?\s*(.+)"),
+            ("media", "Compressed air quality", r"(?:COMPRESSED\s+AIR\s+QUALITY|AIR\s+QUALITY\s+ACCEPTED\s+FOR\s+WORKING|LUFTMINDESTQUALITÄT)\s*:?\s*(.+?ISO\s*8573-1)"),
+            ("component", "Color coding", r"^COLOR\s+CODING.*"),
+            ("component", "Pointer system", r"^SYSTEM\s+H[BL].*"),
+        ]
+        for idx, line in enumerate(lines):
+            if self._is_noise_window(line):
+                continue
+            for category, name, pattern in patterns:
+                match = re.search(pattern, line, re.I)
+                if not match:
+                    continue
+                value = self._compact_value(match.group(1) if match.groups() else match.group(0))
+                if name in {"Color coding", "Pointer system"} and idx + 3 < len(lines):
+                    value = self._compact_value(" | ".join(lines[idx : idx + 4]))
+                yield TechnicalCharacteristic(category, name, value, line, 0.78)
+
     def _dedupe_and_limit(self, rows: list[TechnicalCharacteristic]) -> list[TechnicalCharacteristic]:
         deduped: dict[tuple[str, str, str], TechnicalCharacteristic] = {}
         for row in rows:
@@ -323,6 +355,8 @@ class TechnicalCharacteristicMiner:
         if row.category == "performance" and re.fullmatch(r"\d+(?:[,.]\d+)?\s*bar(?:\(g\))?", value, re.I):
             return False
         if row.category == "protection" and not re.search(r"\bIP\s*\d{2}\b|protection", value, re.I):
+            return False
+        if row.category == "media" and not re.search(r"\b[0-9]-[0-9]-[0-9]\b|ISO\s*8573-1|air quality", value, re.I):
             return False
         if row.category == "mounting" and re.fullmatch(r"M\d+(?:X\d+(?:[,.]\d+)?)?", value, re.I):
             return False
