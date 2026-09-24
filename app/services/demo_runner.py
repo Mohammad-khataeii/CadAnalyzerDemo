@@ -587,13 +587,14 @@ class DemoRunner:
                 if row_idx % 2 == 0:
                     cell.fill = PatternFill("solid", fgColor="F8FAFC")
         ws.freeze_panes = "A5"
-        ws.auto_filter.ref = f"A{header_row}:{get_column_letter(max_col)}{max(header_row, ws.max_row)}"
         if not frame.empty:
             table_ref = f"A{header_row}:{get_column_letter(max_col)}{ws.max_row}"
             table_name = re.sub(r"[^A-Za-z0-9]", "", title.title())[:24] or "Data"
             table = Table(displayName=f"{table_name}Table", ref=table_ref)
             table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False, showRowStripes=True, showColumnStripes=False)
             ws.add_table(table)
+        else:
+            ws.auto_filter.ref = f"A{header_row}:{get_column_letter(max_col)}{header_row}"
         for col_idx, column in enumerate(frame.columns, start=1):
             series = [str(column), *(str(value) for value in frame[column].head(150).tolist())] if column in frame.columns else [str(column)]
             width = min(48, max(10, max(len(value) for value in series[:151]) + 2))
