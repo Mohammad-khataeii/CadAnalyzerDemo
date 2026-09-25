@@ -30,6 +30,7 @@ class ChartBuilder:
         evidence: pd.DataFrame | None = None,
         bom_rows: list[dict[str, Any]] | None = None,
         rule_results: dict[str, Any] | None = None,
+        analyses: list[Any] | None = None,
     ) -> dict[str, Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
         paths: dict[str, Path] = {}
@@ -53,6 +54,8 @@ class ChartBuilder:
             fig.write_html(html)
             self._cluster_scatter_preview(points, html.with_suffix(".png"), "Cluster PCA scatter", symbol_labels=False)
             paths["cluster_scatter"] = html
+        if analyses:
+            paths.update(self._engineering_visual_charts(analyses, output_dir))
         return paths
 
     def build_demo_focus(self, catalogue: pd.DataFrame, clusters: dict[str, Any], output_dir: Path, expected_count: int, focus_name: str = "Focused category") -> dict[str, Path]:
@@ -87,28 +90,35 @@ class ChartBuilder:
 
     def build_visual_packs(self, output_files: dict[str, Path], output_dir: Path, focus_name: str) -> dict[str, Path]:
         level_1 = [
-            ("1. Visual quantity bubbles", "visual_quantity_bubbles", "High-level quantity view of dominant product characteristics."),
-            ("2. Distribution panel", "visual_distribution_panel", "Compact count distributions for the focused catalogue category."),
-            ("9. Affinity heatmap", "affinity_heatmap", "Pairwise technical similarity; darker cells mean closer products."),
-            ("10. Sankey / characteristic flow", "cluster_sankey", "How product attributes converge into clusters."),
-            ("11. Cluster radar", "cluster_radar", "Cluster comparison across completeness, variety, and concentration."),
-            ("12. Characteristic flow preview", "focus_characteristic_flow", "Most common configuration paths in the focused category."),
+            ("Engineering coverage by drawing", "engineering_coverage_matrix", ""),
+            ("Engineering entity coverage", "engineering_entity_coverage", ""),
+            ("Technical parameter families", "engineering_parameter_families", ""),
+            ("Top materials and standards", "engineering_materials_standards", ""),
+            ("BOM and component reuse", "engineering_bom_components", ""),
+            ("Extraction confidence by entity", "engineering_confidence_by_entity", ""),
+            ("Affinity heatmap", "affinity_heatmap", ""),
+            ("Characteristic flow", "cluster_sankey", ""),
         ]
         level_2 = [
-            ("2. Distribution panel", "visual_distribution_panel", "Compact distribution view reused as a bridge from Level 1 to Level 2."),
-            ("3. Visual cluster story", "visual_cluster_story", "Presentation view explaining what each cluster means."),
-            ("8. Hierarchical dendrogram", "cluster_dendrogram", "Tree view of product affinity; closer branches mean stronger similarity."),
+            ("Dimension types by drawing", "engineering_dimension_types", ""),
+            ("Nominal dimensions and tolerances", "engineering_dimension_values", ""),
+            ("Technical parameters by drawing", "engineering_parameters_by_drawing", ""),
+            ("Torque and fastener records", "engineering_torque_fasteners", ""),
+            ("Drawing references and views", "engineering_refs_views", ""),
+            ("Revision events", "engineering_revisions", ""),
+            ("Scatter plot with clusters", "advanced_scatter_cluster", ""),
+            ("Hierarchical dendrogram", "cluster_dendrogram", ""),
         ]
         paths = {
             "level_1_visual_pack": output_dir / "ProductAnalyzer_Level_1_Visuals.pdf",
             "level_2_visual_pack": output_dir / "ProductAnalyzer_Level_2_Visuals.pdf",
         }
-        self._visual_pack_pdf(paths["level_1_visual_pack"], focus_name, "1° livello", level_1, output_files)
-        self._visual_pack_pdf(paths["level_2_visual_pack"], focus_name, "2° livello", level_2, output_files)
+        self._visual_pack_pdf(paths["level_1_visual_pack"], "Grafici livello 1", level_1, output_files)
+        self._visual_pack_pdf(paths["level_2_visual_pack"], "Grafici livello 2", level_2, output_files)
         return paths
 
-    def _visual_pack_pdf(self, pdf_path: Path, focus_name: str, level_name: str, items: list[tuple[str, str, str]], output_files: dict[str, Path]) -> Path:
-        pages: list[tuple[str, Path, str]] = []
+    def _visual_pack_pdf(self, pdf_path: Path, cover_title: str, items: list[tuple[str, str, str]], output_files: dict[str, Path]) -> Path:
+        pages: list[tuple[str, Path]] = []
         for title, key, caption in items:
             path = output_files.get(key)
             if not path:
@@ -117,47 +127,22 @@ class ChartBuilder:
             if path_obj.suffix.lower() == ".html":
                 path_obj = path_obj.with_suffix(".png")
             if path_obj.exists():
-                pages.append((title, path_obj, caption))
+                pages.append((title, path_obj))
         with PdfPages(pdf_path) as pdf:
             fig = plt.figure(figsize=(11.69, 8.27))
             fig.patch.set_facecolor("white")
-            fig.add_artist(plt.Rectangle((0, 0.86), 1, 0.14, transform=fig.transFigure, color="#162033", zorder=0))
-            fig.add_artist(plt.Rectangle((0.06, 0.16), 0.88, 0.01, transform=fig.transFigure, color="#2458d3", zorder=0))
-            fig.text(0.06, 0.91, "Product Analyzer", fontsize=13, fontweight="bold", color="#ffffff")
-            fig.text(0.06, 0.78, level_name, fontsize=34, fontweight="bold", color="#162033")
-            fig.text(0.06, 0.69, focus_name, fontsize=20, fontweight="bold", color="#2458d3")
-            intro = f"Generated visual pack for {focus_name}. The chart numbering follows the client request for {level_name} diagrams."
-            fig.text(0.06, 0.59, textwrap.fill(intro, 88), fontsize=13, color="#637083", linespacing=1.4)
-            fig.add_artist(plt.Rectangle((0.06, 0.34), 0.27, 0.14, transform=fig.transFigure, facecolor="#f5f7fb", edgecolor="#d9e1ec", linewidth=1.0))
-            fig.add_artist(plt.Rectangle((0.36, 0.34), 0.27, 0.14, transform=fig.transFigure, facecolor="#f5f7fb", edgecolor="#d9e1ec", linewidth=1.0))
-            fig.add_artist(plt.Rectangle((0.66, 0.34), 0.27, 0.14, transform=fig.transFigure, facecolor="#f5f7fb", edgecolor="#d9e1ec", linewidth=1.0))
-            fig.text(0.085, 0.435, "Source", fontsize=9, fontweight="bold", color="#637083")
-            fig.text(0.085, 0.385, "PDF-generated catalogue", fontsize=12, fontweight="bold", color="#162033")
-            fig.text(0.385, 0.435, "Charts", fontsize=9, fontweight="bold", color="#637083")
-            fig.text(0.385, 0.385, ", ".join(title.split(".")[0] for title, _, _ in items), fontsize=12, fontweight="bold", color="#162033")
-            fig.text(0.685, 0.435, "Purpose", fontsize=9, fontweight="bold", color="#637083")
-            fig.text(0.685, 0.385, "Client visual review", fontsize=12, fontweight="bold", color="#162033")
-            fig.text(0.06, 0.08, "Generated automatically from the analyzed PDF drawings.", fontsize=9, color="#637083")
+            fig.text(0.5, 0.53, cover_title, fontsize=34, fontweight="bold", color="#162033", ha="center", va="center")
             plt.axis("off")
             pdf.savefig(fig)
             plt.close(fig)
-            total = len(pages)
-            for page_index, (title, image_path, caption) in enumerate(pages, 1):
+            for title, image_path in pages:
                 img = Image.open(image_path).convert("RGB")
                 fig = plt.figure(figsize=(11.69, 8.27))
                 fig.patch.set_facecolor("white")
-                fig.add_artist(plt.Rectangle((0, 0.925), 1, 0.075, transform=fig.transFigure, color="#162033", zorder=0))
-                fig.text(0.055, 0.952, f"{level_name}  |  {focus_name}", fontsize=10, fontweight="bold", color="#ffffff")
-                fig.text(0.945, 0.952, f"{page_index}/{total}", fontsize=9, color="#d6deeb", ha="right")
-                fig.text(0.055, 0.875, title, fontsize=18, fontweight="bold", color="#162033")
-                fig.text(0.055, 0.842, textwrap.fill(caption, 116), fontsize=10.5, color="#637083")
-                fig.add_artist(plt.Rectangle((0.045, 0.185), 0.91, 0.62, transform=fig.transFigure, facecolor="#ffffff", edgecolor="#d9e1ec", linewidth=1.1, zorder=0))
-                ax = fig.add_axes([0.065, 0.205, 0.87, 0.58])
+                fig.text(0.055, 0.925, title, fontsize=20, fontweight="bold", color="#162033")
+                ax = fig.add_axes([0.045, 0.055, 0.91, 0.82])
                 ax.imshow(img)
                 ax.axis("off")
-                fig.add_artist(plt.Rectangle((0.055, 0.065), 0.89, 0.075, transform=fig.transFigure, facecolor="#f5f7fb", edgecolor="#d9e1ec", linewidth=1.0))
-                fig.text(0.075, 0.108, "How to read", fontsize=9, fontweight="bold", color="#162033")
-                fig.text(0.075, 0.083, "Use this page as a visual summary. Detailed extracted rows are in catalogue_generated.xlsx.", fontsize=8.5, color="#637083")
                 pdf.savefig(fig)
                 plt.close(fig)
         return pdf_path
@@ -864,6 +849,380 @@ class ChartBuilder:
         plt.savefig(path, dpi=160)
         plt.close()
         return path
+
+    def _engineering_visual_charts(self, analyses: list[Any], output_dir: Path) -> dict[str, Path]:
+        paths: dict[str, Path] = {}
+        frames = self._engineering_frames(analyses)
+        specs = [
+            ("engineering_entity_coverage", self._engineering_entity_coverage, "engineering_entity_coverage.png"),
+            ("engineering_coverage_matrix", self._engineering_coverage_matrix, "engineering_coverage_matrix.png"),
+            ("engineering_parameter_families", self._engineering_parameter_families, "engineering_parameter_families.png"),
+            ("engineering_materials_standards", self._engineering_materials_standards, "engineering_materials_standards.png"),
+            ("engineering_bom_components", self._engineering_bom_components, "engineering_bom_components.png"),
+            ("engineering_confidence_by_entity", self._engineering_confidence_by_entity, "engineering_confidence_by_entity.png"),
+            ("engineering_dimension_types", self._engineering_dimension_types, "engineering_dimension_types.png"),
+            ("engineering_dimension_values", self._engineering_dimension_values, "engineering_dimension_values.png"),
+            ("engineering_parameters_by_drawing", self._engineering_parameters_by_drawing, "engineering_parameters_by_drawing.png"),
+            ("engineering_torque_fasteners", self._engineering_torque_fasteners, "engineering_torque_fasteners.png"),
+            ("engineering_refs_views", self._engineering_refs_views, "engineering_refs_views.png"),
+            ("engineering_revisions", self._engineering_revisions, "engineering_revisions.png"),
+        ]
+        for key, builder, filename in specs:
+            paths[key] = builder(frames, output_dir / filename)
+        return paths
+
+    def _engineering_frames(self, analyses: list[Any]) -> dict[str, pd.DataFrame]:
+        rows: dict[str, list[dict[str, Any]]] = {
+            "entities": [],
+            "dimensions": [],
+            "parameters": [],
+            "materials": [],
+            "standards": [],
+            "bom": [],
+            "torque": [],
+            "fasteners": [],
+            "refs": [],
+            "views": [],
+            "revisions": [],
+        }
+        for analysis in analyses:
+            document = analysis.source_pdf.name
+            engineering = getattr(analysis, "engineering", None)
+            if not engineering:
+                continue
+            for entity, attr in [
+                ("Dimensions", "dimensions"),
+                ("Technical parameters", "parameters"),
+                ("Materials", "materials"),
+                ("Standards", "standards"),
+                ("BOM items", "bom_items"),
+                ("Components", "components"),
+                ("Torque", "torque_requirements"),
+                ("Fasteners", "fasteners"),
+                ("Drawing references", "drawing_references"),
+                ("Drawing views", "drawing_views"),
+                ("Revisions", "revisions"),
+                ("Schematics", "schematics"),
+            ]:
+                items = getattr(engineering, attr, []) or []
+                rows["entities"].append({"Document": document, "Entity": entity, "Count": len(items)})
+            for item in getattr(engineering, "dimensions", []) or []:
+                rows["dimensions"].append({"Document": document, "Type": item.dimension_type or "unknown", "Value": item.value, "Nominal": item.nominal_value, "Upper Tolerance": item.upper_tolerance, "Unit": item.unit, "Confidence": item.source.confidence})
+            for item in getattr(engineering, "parameters", []) or []:
+                rows["parameters"].append({"Document": document, "Parameter": item.name or "Technical parameter", "Value": item.value, "Unit": item.unit, "Confidence": item.source.confidence})
+            for item in getattr(engineering, "materials", []) or []:
+                rows["materials"].append({"Document": document, "Material": item.material, "Grade": item.grade, "Confidence": item.source.confidence})
+            for item in getattr(engineering, "standards", []) or []:
+                rows["standards"].append({"Document": document, "Standard": item.standard, "Applies To": item.applies_to, "Confidence": item.source.confidence})
+            for item in getattr(engineering, "bom_items", []) or []:
+                label = item.part_number or item.description or item.reference or "BOM item"
+                rows["bom"].append({"Document": document, "Reference": item.reference, "Component": label, "Quantity": item.quantity, "Confidence": item.source.confidence})
+            for item in getattr(engineering, "torque_requirements", []) or []:
+                rows["torque"].append({"Document": document, "Reference": item.reference, "Thread": item.thread or "unknown", "Torque": self._to_float(item.torque), "Unit": item.unit, "Confidence": item.source.confidence})
+            for item in getattr(engineering, "fasteners", []) or []:
+                rows["fasteners"].append({"Document": document, "Type": item.fastener_type or "fastener", "Thread": item.thread or "unknown", "Quantity": item.quantity, "Confidence": item.source.confidence})
+            for item in getattr(engineering, "drawing_references", []) or []:
+                rows["refs"].append({"Document": document, "Reference": item.reference, "Confidence": item.source.confidence})
+            for item in getattr(engineering, "drawing_views", []) or []:
+                rows["views"].append({"Document": document, "View Type": item.view_type or "view", "Label": item.label, "Confidence": item.source.confidence})
+            for item in getattr(engineering, "revisions", []) or []:
+                rows["revisions"].append({"Document": document, "Revision": item.revision, "Change Type": item.change_type or "changed", "Confidence": item.source.confidence})
+        return {name: pd.DataFrame(values) for name, values in rows.items()}
+
+    def _engineering_entity_coverage(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["entities"]
+        if df.empty:
+            return self._empty_png(path, "No engineering entity coverage available")
+        totals = df.groupby("Entity")["Count"].sum().sort_values()
+        totals = totals[totals > 0].tail(14)
+        if totals.empty:
+            return self._empty_png(path, "No populated engineering entities")
+        plt.figure(figsize=(11, 7))
+        bars = plt.barh(totals.index, totals.values, color="#2458d3")
+        plt.title("Engineering entity coverage", fontsize=14, weight="bold", pad=14)
+        plt.xlabel("Extracted records")
+        plt.grid(axis="x", alpha=0.22)
+        for bar in bars:
+            width = bar.get_width()
+            plt.text(width + max(totals.values) * 0.015, bar.get_y() + bar.get_height() / 2, str(int(width)), va="center", fontsize=9)
+        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_coverage_matrix(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["entities"]
+        if df.empty:
+            return self._empty_png(path, "No engineering coverage matrix available")
+        matrix = df.pivot_table(index="Document", columns="Entity", values="Count", aggfunc="sum", fill_value=0)
+        matrix = matrix.loc[:, matrix.sum(axis=0).sort_values(ascending=False).head(10).index]
+        plt.figure(figsize=(12, 7))
+        ax = plt.gca()
+        image = ax.imshow(matrix.values, cmap="YlGnBu", aspect="auto")
+        ax.set_title("Engineering coverage by drawing", fontsize=14, weight="bold", pad=14)
+        ax.set_xticks(range(len(matrix.columns)))
+        ax.set_xticklabels(["\n".join(textwrap.wrap(str(label), 14)) for label in matrix.columns], rotation=35, ha="right", fontsize=8)
+        ax.set_yticks(range(len(matrix.index)))
+        ax.set_yticklabels([self._short_doc(label) for label in matrix.index], fontsize=8)
+        for y in range(matrix.shape[0]):
+            for x in range(matrix.shape[1]):
+                value = int(matrix.iloc[y, x])
+                if value:
+                    ax.text(x, y, str(value), ha="center", va="center", fontsize=8, color="#102033")
+        plt.colorbar(image, ax=ax, fraction=0.026, pad=0.02, label="Records")
+        ax.spines[["top", "right", "left", "bottom"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_parameter_families(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["parameters"]
+        if df.empty:
+            return self._empty_png(path, "No technical parameters available")
+        counts = df["Parameter"].replace("", "Technical parameter").value_counts().head(14).sort_values()
+        plt.figure(figsize=(11, 7))
+        bars = plt.barh(["\n".join(textwrap.wrap(str(label), 28)) for label in counts.index], counts.values, color="#2ca58d")
+        plt.title("Technical parameter families", fontsize=14, weight="bold", pad=14)
+        plt.xlabel("Extracted values")
+        plt.grid(axis="x", alpha=0.22)
+        for bar in bars:
+            width = bar.get_width()
+            plt.text(width + max(counts.values) * 0.02, bar.get_y() + bar.get_height() / 2, str(int(width)), va="center", fontsize=8)
+        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_materials_standards(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        materials = frames["materials"]
+        standards = frames["standards"]
+        rows = []
+        if not materials.empty:
+            rows.extend({"Type": "Material", "Value": key, "Count": value} for key, value in materials["Material"].replace("", "UNKNOWN").value_counts().head(8).items())
+        if not standards.empty:
+            rows.extend({"Type": "Standard", "Value": key, "Count": value} for key, value in standards["Standard"].replace("", "UNKNOWN").value_counts().head(8).items())
+        if not rows:
+            return self._empty_png(path, "No materials or standards available")
+        df = pd.DataFrame(rows).sort_values("Count")
+        colors = df["Type"].map({"Material": "#2458d3", "Standard": "#f2a541"}).fillna("#64748b")
+        plt.figure(figsize=(11, 7))
+        labels = ["\n".join(textwrap.wrap(f"{row['Type']}: {row['Value']}", 34)) for _, row in df.iterrows()]
+        bars = plt.barh(labels, df["Count"], color=colors)
+        plt.title("Top materials and standards", fontsize=14, weight="bold", pad=14)
+        plt.xlabel("Occurrences")
+        plt.grid(axis="x", alpha=0.22)
+        for bar in bars:
+            width = bar.get_width()
+            plt.text(width + max(df["Count"]) * 0.02, bar.get_y() + bar.get_height() / 2, str(int(width)), va="center", fontsize=8)
+        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_bom_components(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["bom"]
+        if df.empty:
+            return self._empty_png(path, "No BOM/component data available")
+        counts = df["Component"].replace("", "UNKNOWN").value_counts().head(16).sort_values()
+        plt.figure(figsize=(11, 7))
+        labels = ["\n".join(textwrap.wrap(str(label), 36)) for label in counts.index]
+        bars = plt.barh(labels, counts.values, color="#536dfe")
+        plt.title("BOM and component reuse", fontsize=14, weight="bold", pad=14)
+        plt.xlabel("Occurrences")
+        plt.grid(axis="x", alpha=0.22)
+        for bar in bars:
+            width = bar.get_width()
+            plt.text(width + max(counts.values) * 0.02, bar.get_y() + bar.get_height() / 2, str(int(width)), va="center", fontsize=8)
+        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_confidence_by_entity(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        rows = []
+        for name, frame in frames.items():
+            if name == "entities" or frame.empty or "Confidence" not in frame.columns:
+                continue
+            rows.append({"Entity": name.replace("_", " ").title(), "Confidence": pd.to_numeric(frame["Confidence"], errors="coerce").mean()})
+        df = pd.DataFrame(rows).dropna()
+        if df.empty:
+            return self._empty_png(path, "No confidence data available")
+        df = df.sort_values("Confidence")
+        colors = ["#b42318" if value < 0.55 else "#f2a541" if value < 0.75 else "#2ca58d" for value in df["Confidence"]]
+        plt.figure(figsize=(11, 7))
+        bars = plt.barh(df["Entity"], df["Confidence"], color=colors)
+        plt.title("Extraction confidence by entity", fontsize=14, weight="bold", pad=14)
+        plt.xlabel("Average confidence")
+        plt.xlim(0, 1)
+        plt.grid(axis="x", alpha=0.22)
+        for bar, value in zip(bars, df["Confidence"]):
+            plt.text(value + 0.015, bar.get_y() + bar.get_height() / 2, f"{value:.2f}", va="center", fontsize=8)
+        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_dimension_types(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["dimensions"]
+        if df.empty:
+            return self._empty_png(path, "No dimension data available")
+        cross = pd.crosstab(df["Document"], df["Type"])
+        cross = cross.loc[:, cross.sum(axis=0).sort_values(ascending=False).index[:8]]
+        plt.figure(figsize=(11, 7))
+        cross.plot(kind="barh", stacked=True, ax=plt.gca(), colormap="Set2")
+        plt.title("Dimension types by drawing", fontsize=14, weight="bold", pad=14)
+        plt.xlabel("Extracted dimensions")
+        plt.ylabel("")
+        plt.yticks(range(len(cross.index)), [self._short_doc(label) for label in cross.index])
+        plt.grid(axis="x", alpha=0.22)
+        plt.legend(loc="lower right", fontsize=8)
+        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_dimension_values(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["dimensions"].copy()
+        if df.empty:
+            return self._empty_png(path, "No dimension values available")
+        df["Nominal"] = pd.to_numeric(df["Nominal"], errors="coerce")
+        df["Upper Tolerance"] = pd.to_numeric(df["Upper Tolerance"], errors="coerce").fillna(0)
+        df = df.dropna(subset=["Nominal"]).sort_values("Nominal").tail(24)
+        if df.empty:
+            return self._empty_png(path, "No numeric dimension values available")
+        colors = df["Type"].astype("category").cat.codes
+        plt.figure(figsize=(12, 7))
+        ax = plt.gca()
+        ax.errorbar(range(len(df)), df["Nominal"], yerr=df["Upper Tolerance"], fmt="none", ecolor="#64748b", alpha=0.55, capsize=3)
+        scatter = ax.scatter(range(len(df)), df["Nominal"], c=colors, cmap="Set2", s=90, edgecolor="white", linewidth=1)
+        ax.set_xticks(range(len(df)))
+        ax.set_xticklabels([self._short_doc(value) for value in df["Document"]], rotation=45, ha="right", fontsize=7)
+        ax.set_title("Nominal dimensions and tolerances", fontsize=14, weight="bold", pad=14)
+        ax.set_ylabel("Nominal value")
+        ax.grid(axis="y", alpha=0.22)
+        ax.spines[["top", "right"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_parameters_by_drawing(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["parameters"]
+        if df.empty:
+            return self._empty_png(path, "No technical parameters available")
+        cross = pd.crosstab(df["Document"], df["Parameter"])
+        cross = cross.loc[:, cross.sum(axis=0).sort_values(ascending=False).head(8).index]
+        plt.figure(figsize=(12, 7))
+        ax = plt.gca()
+        image = ax.imshow(cross.values, cmap="PuBuGn", aspect="auto")
+        ax.set_title("Technical parameters by drawing", fontsize=14, weight="bold", pad=14)
+        ax.set_xticks(range(len(cross.columns)))
+        ax.set_xticklabels(["\n".join(textwrap.wrap(str(label), 15)) for label in cross.columns], rotation=35, ha="right", fontsize=8)
+        ax.set_yticks(range(len(cross.index)))
+        ax.set_yticklabels([self._short_doc(label) for label in cross.index], fontsize=8)
+        for y in range(cross.shape[0]):
+            for x in range(cross.shape[1]):
+                value = int(cross.iloc[y, x])
+                if value:
+                    ax.text(x, y, str(value), ha="center", va="center", fontsize=8, color="#102033")
+        plt.colorbar(image, ax=ax, fraction=0.026, pad=0.02, label="Values")
+        ax.spines[["top", "right", "left", "bottom"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_torque_fasteners(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        torque = frames["torque"]
+        fasteners = frames["fasteners"]
+        rows = []
+        if not torque.empty:
+            rows.extend({"Group": "Torque", "Value": thread, "Count": count} for thread, count in torque["Thread"].replace("", "unknown").value_counts().items())
+        if not fasteners.empty:
+            rows.extend({"Group": "Fastener", "Value": fastener_type, "Count": count} for fastener_type, count in fasteners["Type"].replace("", "fastener").value_counts().items())
+        if not rows:
+            return self._empty_png(path, "No torque or fastener data available")
+        df = pd.DataFrame(rows).sort_values("Count").tail(16)
+        colors = df["Group"].map({"Torque": "#b84a62", "Fastener": "#2ca58d"}).fillna("#64748b")
+        plt.figure(figsize=(11, 7))
+        labels = ["\n".join(textwrap.wrap(f"{row['Group']}: {row['Value']}", 32)) for _, row in df.iterrows()]
+        bars = plt.barh(labels, df["Count"], color=colors)
+        plt.title("Torque and fastener records", fontsize=14, weight="bold", pad=14)
+        plt.xlabel("Records")
+        plt.grid(axis="x", alpha=0.22)
+        for bar in bars:
+            width = bar.get_width()
+            plt.text(width + max(df["Count"]) * 0.02, bar.get_y() + bar.get_height() / 2, str(int(width)), va="center", fontsize=8)
+        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_refs_views(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        refs = frames["refs"]
+        views = frames["views"]
+        rows = []
+        if not refs.empty:
+            rows.extend({"Document": doc, "Type": "Drawing references", "Count": count} for doc, count in refs["Document"].value_counts().items())
+        if not views.empty:
+            rows.extend({"Document": doc, "Type": "Drawing views", "Count": count} for doc, count in views["Document"].value_counts().items())
+        if not rows:
+            return self._empty_png(path, "No drawing references or views available")
+        df = pd.DataFrame(rows)
+        cross = df.pivot_table(index="Document", columns="Type", values="Count", aggfunc="sum", fill_value=0)
+        plt.figure(figsize=(11, 7))
+        cross.plot(kind="barh", ax=plt.gca(), color=["#2458d3", "#f2a541"][: len(cross.columns)])
+        plt.title("Drawing references and views", fontsize=14, weight="bold", pad=14)
+        plt.xlabel("Records")
+        plt.ylabel("")
+        plt.yticks(range(len(cross.index)), [self._short_doc(label) for label in cross.index])
+        plt.grid(axis="x", alpha=0.22)
+        plt.legend(loc="lower right", fontsize=8)
+        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_revisions(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["revisions"]
+        if df.empty:
+            return self._empty_png(path, "No revision events available")
+        cross = pd.crosstab(df["Document"], df["Change Type"])
+        cross = cross.loc[:, cross.sum(axis=0).sort_values(ascending=False).head(8).index]
+        plt.figure(figsize=(11, 7))
+        cross.plot(kind="barh", stacked=True, ax=plt.gca(), colormap="Set3")
+        plt.title("Revision events", fontsize=14, weight="bold", pad=14)
+        plt.xlabel("Events")
+        plt.ylabel("")
+        plt.yticks(range(len(cross.index)), [self._short_doc(label) for label in cross.index])
+        plt.grid(axis="x", alpha=0.22)
+        plt.legend(loc="lower right", fontsize=8)
+        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _short_doc(self, value: Any) -> str:
+        text = str(value).replace(".pdf", "")
+        return "\n".join(textwrap.wrap(text, 18))
+
+    def _to_float(self, value: Any) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            return float(str(value).replace(",", "."))
+        except ValueError:
+            return None
 
     def _empty_png(self, path: Path, message: str) -> Path:
         plt.figure(figsize=(8, 4))

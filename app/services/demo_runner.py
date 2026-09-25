@@ -99,7 +99,7 @@ class DemoRunner:
         bom_rows = [row for a in analyses for row in a.bom_rows]
         chart_builder = ChartBuilder()
         visual_title = demo_focus["filter_value"]
-        chart_paths = chart_builder.build_all(analysis_catalogue, clusters, output_dir, anomalies=anomalies, evidence=evidence, bom_rows=bom_rows, rule_results=rule_results)
+        chart_paths = chart_builder.build_all(analysis_catalogue, clusters, output_dir, anomalies=anomalies, evidence=evidence, bom_rows=bom_rows, rule_results=rule_results, analyses=analyses)
         chart_paths.update(chart_builder.build_demo_focus(analysis_catalogue, clusters, output_dir, len(analysis_catalogue), visual_title))
         output_files.update(chart_paths)
         output_files.update(chart_builder.build_visual_packs(output_files, output_dir, visual_title))
