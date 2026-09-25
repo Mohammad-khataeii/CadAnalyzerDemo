@@ -93,19 +93,29 @@ class ChartBuilder:
             ("Engineering coverage by drawing", "engineering_coverage_matrix", ""),
             ("Engineering entity coverage", "engineering_entity_coverage", ""),
             ("Technical parameter families", "engineering_parameter_families", ""),
+            ("Technical parameter coverage radar", "engineering_parameter_coverage_radar", ""),
             ("Top materials and standards", "engineering_materials_standards", ""),
+            ("Material usage matrix", "engineering_material_usage_matrix", ""),
+            ("Standards compliance map", "engineering_standards_compliance", ""),
             ("BOM and component reuse", "engineering_bom_components", ""),
+            ("BOM complexity ranking", "engineering_bom_complexity", ""),
+            ("Component reuse network", "engineering_component_reuse_network", ""),
             ("Extraction confidence by entity", "engineering_confidence_by_entity", ""),
+            ("Drawing evidence confidence map", "engineering_evidence_confidence_map", ""),
             ("Affinity heatmap", "affinity_heatmap", ""),
             ("Characteristic flow", "cluster_sankey", ""),
         ]
         level_2 = [
             ("Dimension types by drawing", "engineering_dimension_types", ""),
+            ("Dimension criticality map", "engineering_dimension_criticality", ""),
             ("Nominal dimensions and tolerances", "engineering_dimension_values", ""),
+            ("Tolerance spread chart", "engineering_tolerance_spread", ""),
             ("Technical parameters by drawing", "engineering_parameters_by_drawing", ""),
             ("Torque and fastener records", "engineering_torque_fasteners", ""),
+            ("Torque requirement matrix", "engineering_torque_matrix", ""),
             ("Drawing references and views", "engineering_refs_views", ""),
             ("Revision events", "engineering_revisions", ""),
+            ("Revision impact chart", "engineering_revision_impact", ""),
             ("Scatter plot with clusters", "advanced_scatter_cluster", ""),
             ("Hierarchical dendrogram", "cluster_dendrogram", ""),
         ]
@@ -866,6 +876,16 @@ class ChartBuilder:
             ("engineering_torque_fasteners", self._engineering_torque_fasteners, "engineering_torque_fasteners.png"),
             ("engineering_refs_views", self._engineering_refs_views, "engineering_refs_views.png"),
             ("engineering_revisions", self._engineering_revisions, "engineering_revisions.png"),
+            ("engineering_dimension_criticality", self._engineering_dimension_criticality, "engineering_dimension_criticality.png"),
+            ("engineering_tolerance_spread", self._engineering_tolerance_spread, "engineering_tolerance_spread.png"),
+            ("engineering_material_usage_matrix", self._engineering_material_usage_matrix, "engineering_material_usage_matrix.png"),
+            ("engineering_standards_compliance", self._engineering_standards_compliance, "engineering_standards_compliance.png"),
+            ("engineering_bom_complexity", self._engineering_bom_complexity, "engineering_bom_complexity.png"),
+            ("engineering_component_reuse_network", self._engineering_component_reuse_network, "engineering_component_reuse_network.png"),
+            ("engineering_torque_matrix", self._engineering_torque_matrix, "engineering_torque_matrix.png"),
+            ("engineering_revision_impact", self._engineering_revision_impact, "engineering_revision_impact.png"),
+            ("engineering_parameter_coverage_radar", self._engineering_parameter_coverage_radar, "engineering_parameter_coverage_radar.png"),
+            ("engineering_evidence_confidence_map", self._engineering_evidence_confidence_map, "engineering_evidence_confidence_map.png"),
         ]
         for key, builder, filename in specs:
             paths[key] = builder(frames, output_dir / filename)
@@ -1207,6 +1227,250 @@ class ChartBuilder:
         plt.grid(axis="x", alpha=0.22)
         plt.legend(loc="lower right", fontsize=8)
         plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_dimension_criticality(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["dimensions"].copy()
+        if df.empty:
+            return self._empty_png(path, "No dimension criticality data available")
+        df["Upper Tolerance"] = pd.to_numeric(df["Upper Tolerance"], errors="coerce").fillna(0)
+        df["Has tolerance"] = df["Upper Tolerance"].abs() > 0
+        cross = pd.crosstab(df["Document"], df["Has tolerance"]).rename(columns={False: "Without tolerance", True: "With tolerance"})
+        for column in ["With tolerance", "Without tolerance"]:
+            if column not in cross.columns:
+                cross[column] = 0
+        cross = cross[["With tolerance", "Without tolerance"]].sort_values("With tolerance")
+        plt.figure(figsize=(11, 7))
+        cross.plot(kind="barh", stacked=True, ax=plt.gca(), color=["#b84a62", "#cbd5e1"])
+        plt.title("Dimension criticality map", fontsize=14, weight="bold", pad=14)
+        plt.xlabel("Extracted dimensions")
+        plt.ylabel("")
+        plt.yticks(range(len(cross.index)), [self._short_doc(label) for label in cross.index])
+        plt.grid(axis="x", alpha=0.22)
+        plt.legend(loc="lower right", fontsize=8)
+        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_tolerance_spread(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["dimensions"].copy()
+        if df.empty:
+            return self._empty_png(path, "No tolerance spread data available")
+        df["Nominal"] = pd.to_numeric(df["Nominal"], errors="coerce")
+        df["Tolerance"] = pd.to_numeric(df["Upper Tolerance"], errors="coerce").abs()
+        df = df.dropna(subset=["Nominal", "Tolerance"])
+        df = df[df["Tolerance"] > 0].sort_values("Tolerance", ascending=False).head(40)
+        if df.empty:
+            return self._empty_png(path, "No toleranced dimensions available")
+        plt.figure(figsize=(11, 7))
+        ax = plt.gca()
+        for dim_type, group in df.groupby("Type"):
+            ax.scatter(group["Nominal"], group["Tolerance"], s=95, alpha=0.82, label=str(dim_type), edgecolor="white", linewidth=1)
+        ax.set_title("Tolerance spread chart", fontsize=14, weight="bold", pad=14)
+        ax.set_xlabel("Nominal dimension")
+        ax.set_ylabel("Tolerance")
+        ax.grid(alpha=0.22)
+        ax.legend(loc="best", fontsize=8)
+        ax.spines[["top", "right"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_material_usage_matrix(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["materials"]
+        if df.empty:
+            return self._empty_png(path, "No material usage data available")
+        top = df["Material"].replace("", "UNKNOWN").value_counts().head(10).index
+        working = df[df["Material"].isin(top)]
+        matrix = pd.crosstab(working["Document"], working["Material"])
+        return self._heatmap(matrix, path, "Material usage matrix", "Records")
+
+    def _engineering_standards_compliance(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["standards"]
+        if df.empty:
+            return self._empty_png(path, "No standards compliance data available")
+        top = df["Standard"].replace("", "UNKNOWN").value_counts().head(10).index
+        working = df[df["Standard"].isin(top)]
+        matrix = pd.crosstab(working["Document"], working["Standard"])
+        return self._heatmap(matrix, path, "Standards compliance map", "Occurrences")
+
+    def _engineering_bom_complexity(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["bom"]
+        if df.empty:
+            return self._empty_png(path, "No BOM complexity data available")
+        complexity = (
+            df.groupby("Document")
+            .agg(
+                **{
+                    "BOM rows": ("Component", "count"),
+                    "Unique components": ("Component", "nunique"),
+                    "Referenced items": ("Reference", lambda values: values.replace("", pd.NA).dropna().nunique()),
+                }
+            )
+            .sort_values("BOM rows")
+        )
+        plt.figure(figsize=(11, 7))
+        complexity.plot(kind="barh", ax=plt.gca(), color=["#2458d3", "#2ca58d", "#f2a541"])
+        plt.title("BOM complexity ranking", fontsize=14, weight="bold", pad=14)
+        plt.xlabel("Records")
+        plt.ylabel("")
+        plt.yticks(range(len(complexity.index)), [self._short_doc(label) for label in complexity.index])
+        plt.grid(axis="x", alpha=0.22)
+        plt.legend(loc="lower right", fontsize=8)
+        plt.gca().spines[["top", "right", "left"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_component_reuse_network(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["bom"].copy()
+        if df.empty:
+            return self._empty_png(path, "No component reuse data available")
+        df["Component"] = df["Component"].replace("", pd.NA)
+        df = df.dropna(subset=["Component"])
+        reuse = df.groupby("Component")["Document"].nunique().sort_values(ascending=False)
+        reusable = reuse[reuse > 1].head(8).index
+        if len(reusable) == 0:
+            reusable = reuse.head(8).index
+        working = df[df["Component"].isin(reusable)].drop_duplicates(["Document", "Component"])
+        if working.empty:
+            return self._empty_png(path, "No reusable component links available")
+        docs = sorted(working["Document"].unique())
+        comps = list(reusable)
+        fig, ax = plt.subplots(figsize=(12, 7))
+        doc_y = np.linspace(0.92, 0.08, len(docs))
+        comp_y = np.linspace(0.92, 0.08, len(comps))
+        doc_pos = {doc: (0.08, y) for doc, y in zip(docs, doc_y)}
+        comp_pos = {comp: (0.78, y) for comp, y in zip(comps, comp_y)}
+        for _, row in working.iterrows():
+            x1, y1 = doc_pos[row["Document"]]
+            x2, y2 = comp_pos[row["Component"]]
+            ax.plot([x1, x2], [y1, y2], color="#94a3b8", alpha=0.45, linewidth=1.2)
+        for doc, (x, y) in doc_pos.items():
+            ax.scatter(x, y, s=520, color="#2458d3", edgecolor="white", zorder=3)
+            ax.text(x - 0.025, y, self._short_doc(doc).replace("\n", " "), ha="right", va="center", fontsize=8)
+        counts = working["Component"].value_counts()
+        for comp, (x, y) in comp_pos.items():
+            size = 420 + 220 * int(counts.get(comp, 1))
+            ax.scatter(x, y, s=size, color="#2ca58d", edgecolor="white", zorder=3)
+            ax.text(x + 0.03, y, "\n".join(textwrap.wrap(str(comp), 28)), ha="left", va="center", fontsize=8)
+        ax.set_title("Component reuse network", fontsize=14, weight="bold", pad=14)
+        ax.axis("off")
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_torque_matrix(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["torque"].copy()
+        if df.empty:
+            return self._empty_png(path, "No torque matrix data available")
+        df["Thread"] = df["Thread"].replace("", "unknown")
+        matrix = pd.crosstab(df["Document"], df["Thread"])
+        return self._heatmap(matrix, path, "Torque requirement matrix", "Records")
+
+    def _engineering_revision_impact(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["revisions"]
+        if df.empty:
+            return self._empty_png(path, "No revision impact data available")
+        impact = pd.crosstab(df["Document"], df["Change Type"])
+        impact = impact.loc[:, impact.sum(axis=0).sort_values(ascending=False).head(8).index]
+        return self._heatmap(impact, path, "Revision impact chart", "Events")
+
+    def _engineering_parameter_coverage_radar(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        df = frames["parameters"].copy()
+        if df.empty:
+            return self._empty_png(path, "No parameter coverage data available")
+        categories = ["Pressure", "Temperature", "Electrical", "Performance", "Weight", "Torque"]
+        patterns = {
+            "Pressure": r"pressure|bar",
+            "Temperature": r"temperature|°c",
+            "Electrical": r"voltage|current|power|electrical|vac|vdc|kw|w\b|a\b",
+            "Performance": r"rpm|speed|flow|delivery|duty|starts",
+            "Weight": r"weight|kg",
+            "Torque": r"torque|nm",
+        }
+        docs = list(df["Document"].drop_duplicates())[:6]
+        angles = np.linspace(0, 2 * np.pi, len(categories), endpoint=False).tolist()
+        angles += angles[:1]
+        fig, ax = plt.subplots(figsize=(8.2, 8.2), subplot_kw=dict(polar=True))
+        for doc in docs:
+            subset = df[df["Document"] == doc]
+            values = []
+            text = (subset["Parameter"].astype(str) + " " + subset["Unit"].astype(str)).str.lower()
+            for category in categories:
+                values.append(100.0 if text.str.contains(patterns[category], regex=True).any() else 0.0)
+            values += values[:1]
+            ax.plot(angles, values, linewidth=2, label=self._short_doc(doc).replace("\n", " "))
+            ax.fill(angles, values, alpha=0.08)
+        ax.set_title("Technical parameter coverage radar", fontsize=14, weight="bold", pad=24)
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(categories, fontsize=9)
+        ax.set_ylim(0, 100)
+        ax.legend(loc="upper right", bbox_to_anchor=(1.35, 1.12), fontsize=7)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _engineering_evidence_confidence_map(self, frames: dict[str, pd.DataFrame], path: Path) -> Path:
+        rows = []
+        for name, frame in frames.items():
+            if name == "entities" or frame.empty or "Confidence" not in frame.columns or "Document" not in frame.columns:
+                continue
+            grouped = frame.assign(Confidence=pd.to_numeric(frame["Confidence"], errors="coerce")).groupby("Document")["Confidence"].mean().reset_index()
+            for row in grouped.to_dict("records"):
+                rows.append({"Document": row["Document"], "Entity": name.replace("_", " ").title(), "Confidence": row["Confidence"]})
+        df = pd.DataFrame(rows).dropna()
+        if df.empty:
+            return self._empty_png(path, "No evidence confidence map available")
+        matrix = df.pivot_table(index="Document", columns="Entity", values="Confidence", aggfunc="mean", fill_value=0)
+        matrix = matrix.loc[:, matrix.mean(axis=0).sort_values(ascending=False).head(10).index]
+        plt.figure(figsize=(12, 7))
+        ax = plt.gca()
+        image = ax.imshow(matrix.values, cmap="RdYlGn", vmin=0, vmax=1, aspect="auto")
+        ax.set_title("Drawing evidence confidence map", fontsize=14, weight="bold", pad=14)
+        ax.set_xticks(range(len(matrix.columns)))
+        ax.set_xticklabels(["\n".join(textwrap.wrap(str(label), 13)) for label in matrix.columns], rotation=35, ha="right", fontsize=8)
+        ax.set_yticks(range(len(matrix.index)))
+        ax.set_yticklabels([self._short_doc(label) for label in matrix.index], fontsize=8)
+        for y in range(matrix.shape[0]):
+            for x in range(matrix.shape[1]):
+                value = float(matrix.iloc[y, x])
+                if value:
+                    ax.text(x, y, f"{value:.2f}", ha="center", va="center", fontsize=7, color="#102033")
+        plt.colorbar(image, ax=ax, fraction=0.026, pad=0.02, label="Confidence")
+        ax.spines[["top", "right", "left", "bottom"]].set_visible(False)
+        plt.tight_layout()
+        plt.savefig(path, dpi=165)
+        plt.close()
+        return path
+
+    def _heatmap(self, matrix: pd.DataFrame, path: Path, title: str, colorbar_label: str) -> Path:
+        if matrix.empty:
+            return self._empty_png(path, f"No data for {title}")
+        plt.figure(figsize=(12, 7))
+        ax = plt.gca()
+        image = ax.imshow(matrix.values, cmap="YlGnBu", aspect="auto")
+        ax.set_title(title, fontsize=14, weight="bold", pad=14)
+        ax.set_xticks(range(len(matrix.columns)))
+        ax.set_xticklabels(["\n".join(textwrap.wrap(str(label), 16)) for label in matrix.columns], rotation=35, ha="right", fontsize=8)
+        ax.set_yticks(range(len(matrix.index)))
+        ax.set_yticklabels([self._short_doc(label) for label in matrix.index], fontsize=8)
+        for y in range(matrix.shape[0]):
+            for x in range(matrix.shape[1]):
+                value = matrix.iloc[y, x]
+                if value:
+                    ax.text(x, y, str(int(value)), ha="center", va="center", fontsize=8, color="#102033")
+        plt.colorbar(image, ax=ax, fraction=0.026, pad=0.02, label=colorbar_label)
+        ax.spines[["top", "right", "left", "bottom"]].set_visible(False)
         plt.tight_layout()
         plt.savefig(path, dpi=165)
         plt.close()
